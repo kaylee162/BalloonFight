@@ -1,0 +1,70 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "windows": {
+        "options": {
+            "shell": {
+                "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "args": ["-NoProfile", "-Command"]
+            }
+        }
+    },
+    "tasks": [
+        {
+            "label": "run",
+            "type": "shell",
+            "windows": {
+                "command": "C:\\Users\\alpha\\source\\cs2261\\mGBA-0.10.5-win64\\mGBA.exe ./my_project.gba"
+                // Add the mGBA.exe exact path to the above line inside the quotes before the space in  " ./Project.gba"!
+                //      (use double-backslash "\\" or "/" between folders),
+                // Make sure there is a space between the exact path and "./my_project.gba".
+            },
+            "osx": {
+                "command": "open -a /Applications/mGBA.app ./my_project.gba"
+                // Add the mGBA.app exact path to the above line,
+                // in between "open -a" and " ./Project.gba"!
+                // Make sure there is a space before/after the path the exact path and "./my_project.gba".
+            },
+            "linux":{
+                "command": "You're on your own, but the above should be close."
+            },
+            "problemMatcher": [],
+            "dependsOn": [
+                "build"
+            ],
+            "dependsOrder": "sequence",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "docker run --rm -it -v \"${PWD}:/gba\" aaaronic/gba-compiler:1.4",
+            "problemMatcher": []
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "docker run --rm -it -v \"${PWD}:/gba\" aaaronic/gba-compiler:1.4 clean",
+            "problemMatcher": []
+        },
+        {
+            "label": "audio",
+            "type": "shell",
+            "command": "docker run --rm -it -v \"${PWD}:/gba\" aaaronic/gba-compiler:1.4 audio",
+            "problemMatcher": []
+        },
+        {
+            "label": "zip",
+            "type": "shell",
+            "windows": {
+                "command": "Compress-Archive -Force . \"$(Split-Path -Path (Get-Location) -Leaf).zip\"",
+            },
+            "command": "export zip=\"$(basename \"$(pwd)\").zip\"; rm -f $zip; zip -x \"*.DS_Store\" -Xr \"$zip\" .",
+            "problemMatcher": []
+        }
+    ]
+}
