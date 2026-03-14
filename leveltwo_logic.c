@@ -1,5 +1,6 @@
 #include "game.h"
 #include "leveltwo_logic.h"
+#include "leveltwo.h"
 
 void initLevel2(void) {
     int i;
@@ -78,35 +79,9 @@ void initLevel2(void) {
 }
 
 void buildLevel2Map(void) {
-    int x, y;
-
-    // Clear both screenblocks used by the wide map
-    clearScreenblock(24);
-    clearScreenblock(25);
-
-    // Fill the whole 64x32 map using two screenblocks
-    for (y = 0; y < LEVEL2_MAP_H; y++) {
-        for (x = 0; x < LEVEL2_MAP_W; x++) {
-            int entry = TILE_SKY;
-
-            // Scatter star background tiles
-            if (((x + y) % 7) == 0) {
-                entry = TILE_STARBG;
-            }
-
-            // Add clouds every so often
-            if ((y == 6 || y == 12) && (x % 9 == 0 || x % 13 == 0)) {
-                entry = TILE_CLOUD;
-            }
-
-            // 64x32 uses two 32x32 screenblocks horizontally
-            if (x < 32) {
-                SCREENBLOCK[24].tilemap[y * 32 + x] = entry;
-            } else {
-                SCREENBLOCK[25].tilemap[y * 32 + (x - 32)] = entry;
-            }
-        }
-    }
+    // Copy the artist-made 64x32 level 2 map into the two horizontal screenblocks.
+    DMANow(3, (void*) leveltwoMap, SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap, 1024);
+    DMANow(3, (void*) (leveltwoMap + 1024), SCREENBLOCK[LEVEL_SCREENBLOCK + 1].tilemap, 1024);
 }
 
 void updateLevel2(void) {
@@ -148,6 +123,9 @@ void updateLevel2(void) {
 }
 
 void updatePlayerLevel2(void) {
+    int floorY;
+    int floatStrength;
+
     // Save old position
     player.oldX = player.x;
     player.oldY = player.y;
@@ -155,7 +133,7 @@ void updatePlayerLevel2(void) {
     // Default movement state
     player.isMoving = 0;
 
-    // Free movement in the traversal level
+    // Horizontal movement
     if (BUTTON_HELD(BUTTON_LEFT)) {
         player.x -= 2;
         player.direction = DIR_LEFT;
@@ -168,16 +146,71 @@ void updatePlayerLevel2(void) {
         player.isMoving = 1;
     }
 
-    // Upward control with A and/or UP
-    if (BUTTON_HELD(BUTTON_A) || BUTTON_HELD(BUTTON_UP)) {
-        player.y -= 2;
+    // Bottom of the screen acts as the ground in level 2
+    floorY = SCREENHEIGHT - player.height;
+
+    // Check whether the player is standing on the ground
+    if (player.y >= floorY) {
+        player.y = floorY;
+        player.grounded = 1;
+    } else {
+        player.grounded = 0;
+    }
+
+    // Press A to float upward based on remaining lives/balloons
+    // This works both from the ground and in the air
+    if (BUTTON_PRESSED(BUTTON_A) && player.lives > 0) {
+        player.yVel = getFloatVelocityForLives(player.lives);
+        player.grounded = 0;
         player.isMoving = 1;
     }
 
-    // Downward control
-    if (BUTTON_HELD(BUTTON_DOWN)) {
-        player.y += 2;
-        player.isMoving = 1;
+    // Gravity always pulls the player downward when airborne
+    if (!player.grounded) {
+        player.yVel += PLAYER_GRAVITY;
+
+        if (player.yVel > PLAYER_MAX_FALL_SPEED) {
+            player.yVel = PLAYER_MAX_FALL_SPEED;
+        }
+    }
+
+    // If grounded, do not keep downward velocity
+    if (player.grounded && player.yVel > 0) {
+        player.yVel = 0;
+    }
+
+    // Apply vertical movement one pixel at a time
+    while (player.yVel < 0) {
+        if (player.y > 16) {
+            player.y--;
+            player.yVel++;
+        } else {
+            player.y = 16;
+            player.yVel = 0;
+            break;
+        }
+    }
+
+    while (player.yVel > 0) {
+        if (player.y < floorY) {
+            player.y++;
+            player.yVel--;
+        } else {
+            player.y = floorY;
+            player.yVel = 0;
+            break;
+        }
+    }
+
+    // Recompute grounded after moving
+    if (player.y >= floorY) {
+        player.y = floorY;
+        player.grounded = 1;
+        if (player.yVel > 0) {
+            player.yVel = 0;
+        }
+    } else {
+        player.grounded = 0;
     }
 
     // Shooting is still allowed
@@ -187,7 +220,13 @@ void updatePlayerLevel2(void) {
 
     // Keep player inside level 2 bounds
     player.x = CLAMP(player.x, 0, LEVEL2_PIXEL_W - player.width);
-    player.y = CLAMP(player.y, 16, SCREENHEIGHT - player.height);
+    player.y = CLAMP(player.y, 16, floorY);
+
+    // Treat vertical drifting/floating as movement for animation
+    floatStrength = absInt(player.y - player.oldY);
+    if (floatStrength > 0) {
+        player.isMoving = 1;
+    }
 }
 
 void updateBalloonsLevel2(void) {

@@ -8,6 +8,7 @@
 
 #include "tileset.h"
 #include "levelone.h"
+#include "leveltwo.h"
 #include "collisionMapOne.h"
 
 // ======================================================
@@ -141,6 +142,10 @@ static void putCharHUD(int col, int row, char c);
 static void putStringHUD(int col, int row, const char* str);
 static void putNumberHUD(int col, int row, int value, int digits);
 static int glyphIndexForChar(char c);
+static void prepareMenuLayers(void);
+static void clearMenuBackground(unsigned short entry);
+static void putStringMenu(int col, int row, const char* str);
+static void putNumberMenu(int col, int row, int value, int digits);
 
 // Menu screens
 static void drawStartScreen(void);
@@ -184,7 +189,6 @@ void drawDoorSprite(int screenX, int screenY);
 
 // Level One 
 int rectTouchesColor(int x, int y, int width, int height, u8 color);
-int isLadderPixel(int x, int y);
 int isHazardPixel(int x, int y);
 int isGoalPixel(int x, int y);
 
@@ -346,7 +350,6 @@ void resetPlayerForCurrentLevel(void) {
     player.animCounter = 0;
     player.isMoving = 0;
     player.grounded = 0;
-    player.onLadder = 0;
 
     // Start positions depend on the current state
     if (state == STATE_LEVEL2) {
@@ -533,6 +536,8 @@ void updateEnemies(void) {
 // ======================================================
 
 void damagePlayer(void) {
+    int spawnGroundY;
+
     // Ignore damage while invincible
     if (player.invincibleTimer > 0) {
         return;
@@ -542,16 +547,20 @@ void damagePlayer(void) {
     player.lives--;
     player.invincibleTimer = 60;
 
-    // Respawn position depends on the current level
-    if (state == STATE_LEVEL1) {
-        int spawnGroundY;
+    // Reset movement state
+    player.yVel = 0;
+    player.xVel = 0;
+    player.grounded = 0;
 
-        player.x = 8;
+    // Respawn at the level's starting location
+    if (state == STATE_LEVEL1) {
+        player.x = PLAYER_START_X;
+
+        // Find the ground under the level 1 spawn
         spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
         player.y = (spawnGroundY >= 0) ? spawnGroundY : PLAYER_START_Y;
-        player.yVel = 0;
     } else if (state == STATE_LEVEL2) {
-        player.x = CLAMP(player.x - 24, 0, LEVEL2_PIXEL_W - player.width);
+        player.x = 16;
         player.y = 70;
     }
 }
@@ -573,10 +582,6 @@ u8 getCollisionPixel(int x, int y) {
 
 int isSolidPixel(int x, int y) {
     return getCollisionPixel(x, y) == CM_BLOCKED;
-}
-
-int isLadderPixel(int x, int y) {
-    return getCollisionPixel(x, y) == CM_LADDER;
 }
 
 int isHazardPixel(int x, int y) {
@@ -611,7 +616,6 @@ int canMoveTo(int x, int y, int width, int height) {
         return 0;
     }
 
-    // Allow ladders and open/goal/hazard pixels.
     // Only blocked pixels stop movement.
     for (py = y; py < y + height; py++) {
         for (px = x; px < x + width; px++) {
@@ -643,6 +647,18 @@ int findLowestGroundYAtX(int x, int width, int height) {
 
 int absInt(int x) {
     return (x < 0) ? -x : x;
+}
+
+int getFloatVelocityForLives(int lives) {
+    if (lives >= 3) {
+        return PLAYER_FLOAT_THREE_LIVES;
+    } else if (lives == 2) {
+        return PLAYER_FLOAT_TWO_LIVES;
+    } else if (lives == 1) {
+        return PLAYER_FLOAT_ONE_LIFE;
+    }
+
+    return 0;
 }
 
 // ======================================================
@@ -714,59 +730,74 @@ void drawHUD(void) {
 //                     MENU DRAWING
 // ======================================================
 
+static void prepareMenuLayers(void) {
+    initMode0();
+
+    setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
+    setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
+
+    setBackgroundOffset(0, 0, 0);
+    setBackgroundOffset(1, 0, 0);
+
+    clearHUD();
+    clearScreenblock(LEVEL_SCREENBLOCK);
+    hideSprites();
+}
+
+static void clearMenuBackground(unsigned short entry) {
+    int i;
+    for (i = 0; i < 32 * 32; i++) {
+        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[i] = entry;
+    }
+}
+
+static void putStringMenu(int col, int row, const char* str) {
+    putStringHUD(col, row, str);
+}
+
+static void putNumberMenu(int col, int row, int value, int digits) {
+    putNumberHUD(col, row, value, digits);
+}
+
 static void drawStartScreen(void) {
-    fillScreen4(0);
+    prepareMenuLayers();
 
-    drawRect4(0, 0, SCREENWIDTH, SCREENHEIGHT, 12);
-    drawRect4(0, 0, SCREENWIDTH, 24, 14);
-    drawRect4(0, 136, SCREENWIDTH, 24, 10);
+    clearMenuBackground(0);
 
-    drawRect4(16, 34, 32, 24, 13);
-    drawRect4(58, 22, 24, 18, 15);
-    drawRect4(92, 40, 28, 20, 13);
-    drawRect4(140, 30, 40, 28, 15);
-    drawRect4(196, 44, 24, 18, 13);
-
-    drawString4(58, 12, "BALLOON GAME", 0);
-    drawString4(40, 100, "PRESS START", 0);
-    drawString4(20, 120, "B TO SHOOT", 0);
-    drawString4(20, 132, "A TO FLOAT", 0);
-
-    waitForVBlank();
-    flipPage();
+    putStringMenu(8, 3, "BALLOON GAME");
+    putStringMenu(8, 10, "PRESS START");
+    putStringMenu(6, 14, "B TO SHOOT");
+    putStringMenu(6, 16, "A TO FLOAT");
 }
 
 static void drawPauseScreen(void) {
-    fillScreen4(0);
-    drawRect4(0, 0, SCREENWIDTH, SCREENHEIGHT, 7);
-    drawString4(86, 60, "PAUSED", 0);
-    drawString4(38, 90, "PRESS START TO RESUME", 0);
+    prepareMenuLayers();
 
-    waitForVBlank();
-    flipPage();
+    clearMenuBackground(0);
+
+    putStringMenu(11, 7, "PAUSED");
+    putStringMenu(3, 11, "PRESS START TO RESUME");
 }
 
 static void drawWinScreen(void) {
-    fillScreen4(0);
-    drawRect4(0, 0, SCREENWIDTH, SCREENHEIGHT, 11);
-    drawString4(90, 56, "YOU WIN!", 0);
-    drawString4(54, 78, "FINAL SCORE", 0);
-    drawString4(118, 94, "0000", 0);
-    drawString4(32, 124, "PRESS START TO RESTART", 0);
+    prepareMenuLayers();
 
-    waitForVBlank();
-    flipPage();
+    clearMenuBackground(0);
+
+    putStringMenu(10, 6, "YOU WIN!");
+    putStringMenu(6, 9, "FINAL SCORE");
+    putNumberMenu(14, 11, score, 4);
+    putStringMenu(3, 15, "PRESS START TO RESTART");
 }
 
 static void drawLoseScreen(void) {
-    fillScreen4(0);
-    drawRect4(0, 0, SCREENWIDTH, SCREENHEIGHT, 3);
-    drawString4(86, 56, "YOU LOSE", 0);
-    drawString4(50, 84, "TRY AGAIN", 0);
-    drawString4(32, 124, "PRESS START TO RESTART", 0);
+    prepareMenuLayers();
 
-    waitForVBlank();
-    flipPage();
+    clearMenuBackground(0);
+
+    putStringMenu(9, 6, "YOU LOSE");
+    putStringMenu(8, 10, "TRY AGAIN");
+    putStringMenu(3, 15, "PRESS START TO RESTART");
 }
 
 // ======================================================
@@ -836,20 +867,20 @@ void hideUnusedSpritesFrom(int startIndex) {
 // ======================================================
 
 static void initGraphics(void) {
-    // Initialize mode 4 first for menu rendering
-    REG_DISPCNT = MODE4 | BG2_ENABLE | DISP_BACKBUFFER;
+    // Keep the whole game in Mode 0.
+    initMode0();
 
-    // Build palettes and tile art used once the game enters Mode 0
-    initPalettes();
+    // Load the artist-made tileset and palette used by the level tilemaps.
+    loadBgPalette(tilesetPal, tilesetPalLen / 2);
+    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
 
-    // Build BG tiles for the HUD and level backgrounds
+    // Build HUD font tiles in their own charblock.
     buildHudTiles();
-    buildBackgroundTiles();
 
-    // Build OBJ tiles for player, enemies, bullets, balloons, stars, and door
+    // Build OBJ tiles for player, enemies, bullets, balloons, stars, and door.
     buildSpriteTiles();
 
-    // Hide every sprite initially
+    // Hide every sprite initially.
     hideSprites();
 }
 
@@ -873,22 +904,22 @@ static void initPalettes(void) {
     BG_PALETTE[15] = RGB(31, 31, 31);
 
     // Sprite palette
-    SPRITEPALETTE[0] = RGB(0, 0, 0);
-    SPRITEPALETTE[1] = RGB(31, 31, 31);
-    SPRITEPALETTE[2] = RGB(31, 24, 8);
-    SPRITEPALETTE[3] = RGB(31, 10, 16);
-    SPRITEPALETTE[4] = RGB(8, 16, 31);
-    SPRITEPALETTE[5] = RGB(10, 28, 10);
-    SPRITEPALETTE[6] = RGB(31, 31, 0);
-    SPRITEPALETTE[7] = RGB(20, 10, 31);
-    SPRITEPALETTE[8] = RGB(31, 18, 0);
-    SPRITEPALETTE[9] = RGB(20, 20, 20);
-    SPRITEPALETTE[10] = RGB(31, 0, 0);
-    SPRITEPALETTE[11] = RGB(0, 31, 0);
-    SPRITEPALETTE[12] = RGB(0, 0, 31);
-    SPRITEPALETTE[13] = RGB(31, 31, 31);
-    SPRITEPALETTE[14] = RGB(31, 20, 20);
-    SPRITEPALETTE[15] = RGB(28, 28, 10);
+    SPRITE_PAL[0] = RGB(0, 0, 0);
+    SPRITE_PAL[1] = RGB(31, 31, 31);
+    SPRITE_PAL[2] = RGB(31, 24, 8);
+    SPRITE_PAL[3] = RGB(31, 10, 16);
+    SPRITE_PAL[4] = RGB(8, 16, 31);
+    SPRITE_PAL[5] = RGB(10, 28, 10);
+    SPRITE_PAL[6] = RGB(31, 31, 0);
+    SPRITE_PAL[7] = RGB(20, 10, 31);
+    SPRITE_PAL[8] = RGB(31, 18, 0);
+    SPRITE_PAL[9] = RGB(20, 20, 20);
+    SPRITE_PAL[10] = RGB(31, 0, 0);
+    SPRITE_PAL[11] = RGB(0, 31, 0);
+    SPRITE_PAL[12] = RGB(0, 0, 31);
+    SPRITE_PAL[13] = RGB(31, 31, 31);
+    SPRITE_PAL[14] = RGB(31, 20, 20);
+    SPRITE_PAL[15] = RGB(28, 28, 10);
 }
 
 static void buildHudTiles(void) {

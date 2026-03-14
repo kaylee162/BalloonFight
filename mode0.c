@@ -83,3 +83,9 @@ void loadTilesToCharblock(int charblock, const unsigned short* tiles, int count)
 void loadBgPalette(const unsigned short* palette, int count) {
     DMANow(3, (void*) palette, BG_PALETTE, count);
 }
+
+void clearCharBlock(int charblock) {
+    static u32 zero = 0;
+    DMANow(3, &zero, CHARBLOCK[charblock].tileimg,
+           (8192 / 2) | DMA_SOURCE_FIXED);
+}
