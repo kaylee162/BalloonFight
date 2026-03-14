@@ -67,4 +67,6 @@ void loadMapToScreenblock(int screenblock, const unsigned short* map, int count)
 void loadTilesToCharblock(int charblock, const unsigned short* tiles, int count);
 void loadBgPalette(const unsigned short* palette, int count);
 
+
+void clearCharBlock(int charblock);
 #endif

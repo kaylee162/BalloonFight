@@ -21,9 +21,8 @@
 // Level 1 collision map color indices
 #define CM_BLOCKED 0   // black
 #define CM_OPEN    1   // white
-#define CM_LADDER  2   // blue
-#define CM_KILL    3   // red
-#define CM_GOAL    4   // green
+#define CM_KILL    2   // red
+#define CM_GOAL    3   // green
 
 // Shared gameplay constants used across game.c and level logic files
 #define CLAMP(value, min, max) ((value) < (min) ? (min) : ((value) > (max) ? (max) : (value)))
@@ -72,6 +71,11 @@
 #define SCORE_BALLOON_BONUS 100
 #define SCORE_ENEMY_KILL    200
 
+#define PLAYER_FLOAT_ONE_LIFE     -4
+#define PLAYER_FLOAT_TWO_LIVES    -6
+#define PLAYER_FLOAT_THREE_LIVES  -8
+#define PLAYER_GRAVITY             1
+#define PLAYER_MAX_FALL_SPEED      4
 // Game states required by the assignment PDF
 typedef enum {
     STATE_START,
@@ -161,7 +165,6 @@ typedef struct {
     int grounded;
     int lives;
     int invincibleTimer;
-    int onLadder;
 } Player;
 
 
@@ -205,7 +208,6 @@ void damagePlayer(void);
 
 u8 getCollisionPixel(int x, int y);
 int isSolidPixel(int x, int y);
-int isLadderPixel(int x, int y);
 int isHazardPixel(int x, int y);
 int isGoalPixel(int x, int y);
 int rectTouchesColor(int x, int y, int width, int height, u8 color);
@@ -213,6 +215,7 @@ int canMoveTo(int x, int y, int width, int height);
 int findGroundYBelow(int x, int y, int width, int height);
 int findLowestGroundYAtX(int x, int width, int height);
 int absInt(int x);
+int getFloatVelocityForLives(int lives);
 
 // Main game interface
 void initGame(void);
