@@ -18,6 +18,13 @@
 #define PLAYER_WIDTH 16
 #define PLAYER_HEIGHT 16
 
+// Level 1 collision map color indices
+#define CM_BLOCKED 0   // black
+#define CM_OPEN    1   // white
+#define CM_LADDER  2   // blue
+#define CM_KILL    3   // red
+#define CM_GOAL    4   // green
+
 // Game states required by the assignment PDF
 typedef enum {
     STATE_START,
@@ -107,6 +114,7 @@ typedef struct {
     int grounded;
     int lives;
     int invincibleTimer;
+    int onLadder;
 } Player;
 
 // Main game interface

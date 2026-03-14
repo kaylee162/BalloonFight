@@ -1,5 +1,12 @@
-#include "game.h"
+#include "gba.h"
+#include "mode0.h"
+#include "sprites.h"
 #include "print.h"
+#include "game.h"
+
+#include "tileset.h"
+#include "levelone.h"
+#include "collisionMapOne.h"
 
 // ======================================================
 //                       VRAM HELPERS
@@ -93,6 +100,9 @@ static int level2BalloonsRemaining;
 static int enemiesRemaining;
 
 // Level state
+// Level state
+static int level1HOff;
+static int level1VOff;
 static int level2HOff;
 static int menuNeedsRedraw;
 
@@ -103,9 +113,6 @@ static int doorY;
 
 // Frame counter
 static int frameCount;
-
-// Collision map for level 1
-static unsigned char collisionMap[LEVEL1_MAP_W * LEVEL1_MAP_H];
 
 // ======================================================
 //                   FORWARD DECLARATIONS
@@ -146,6 +153,7 @@ static void resetPlayerForCurrentLevel(void);
 static void buildLevel1MapAndCollision(void);
 static void buildLevel2Map(void);
 
+
 // Update handlers
 static void updateStart(void);
 static void updateLevel1(void);
@@ -172,10 +180,10 @@ static void updateBalloonsLevel2(void);
 static void updateStars(void);
 
 // Physics / collisions
-static int isSolidTile(int tileX, int tileY);
 static int isSolidPixel(int x, int y);
 static int canMoveTo(int x, int y, int width, int height);
 static int findGroundYBelow(int x, int y, int width, int height);
+static int findLowestGroundYAtX(int x, int width, int height);
 static void damagePlayer(void);
 
 // Sprite drawing
@@ -187,6 +195,14 @@ static void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBu
 static void drawBalloonSprite(int oamIndex, int screenX, int screenY);
 static void drawStarSprite(int oamIndex, int screenX, int screenY);
 static void drawDoorSprite(int screenX, int screenY);
+
+// Level One 
+static u8 getCollisionPixel(int x, int y);
+static int rectTouchesColor(int x, int y, int width, int height, u8 color);
+static int isLadderPixel(int x, int y);
+static int isHazardPixel(int x, int y);
+static int isGoalPixel(int x, int y);
+
 
 // Utility
 static void hideUnusedSpritesFrom(int startIndex);
@@ -455,28 +471,8 @@ static void buildBackgroundTiles(void) {
 
 // Builds simple sprite graphics
 static void buildSpriteTiles(void) {
-    int i;
-    u8 pixels[64];
-
     // First clear a safe amount of OBJ tile memory
     clearObjTiles();
-
-    // ------------------------------
-    // Player frame 0 (2x2 tiles)
-    // ------------------------------
-    for (i = 0; i < 64; i++) {
-        pixels[i] = 0;
-    }
-
-    // Head/body shape for player
-    {
-        int x, y;
-        for (y = 2; y < 14; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 8 + (x % 8)] = 0;
-            }
-        }
-    }
 
     // Build 4 tiles of a 16x16 sprite
     {
@@ -1108,11 +1104,20 @@ static void initLevel1(void) {
     setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
 
     // Reset scrolling
+    level1HOff = 0;
+    level1VOff = 0;
     setBackgroundOffset(0, 0, 0);
-    setBackgroundOffset(1, 0, 0);
+    setBackgroundOffset(1, level1HOff, level1VOff);
 
     // Build tilemap and collision map for level 1
     buildLevel1MapAndCollision();
+
+    // Reset player lives for a fresh level start
+    player.lives = 3;
+    player.invincibleTimer = 0;
+
+    // Place the player for the current level
+    resetPlayerForCurrentLevel();
 
     // Reset level state
     enemiesRemaining = MAX_ENEMIES;
@@ -1172,9 +1177,6 @@ static void initLevel1(void) {
     for (i = 0; i < MAX_STARS; i++) {
         stars[i].active = 0;
     }
-
-    // Reset player with 3 lives at the start of the level
-    resetPlayerForCurrentLevel();
 }
 
 // Initializes level 2
@@ -1254,97 +1256,51 @@ static void initLevel2(void) {
     player.y = 70;
 }
 
-// Resets the player for the current level
+// Resets the player position and movement state for the current level.
+// Do not reset lives here.
 static void resetPlayerForCurrentLevel(void) {
-    // Reset player position
-    player.x = PLAYER_START_X;
-    player.y = PLAYER_START_Y;
-    player.oldX = player.x;
-    player.oldY = player.y;
-
-    // Reset velocities
-    player.xVel = 0;
-    player.yVel = 0;
-
-    // Reset dimensions
     player.width = PLAYER_WIDTH;
     player.height = PLAYER_HEIGHT;
 
-    // Face right by default
-    player.direction = DIR_RIGHT;
+    if (state == STATE_LEVEL1) {
+        player.x = 8;
+        player.y = findLowestGroundYAtX(player.x, player.width, player.height);
 
-    // Animation defaults
+        // Safety fallback
+        if (player.y < 0) {
+            player.y = LEVEL1_PIXEL_H - 24 - player.height;
+        }
+    } else {
+        player.x = PLAYER_START_X;
+        player.y = PLAYER_START_Y;
+    }
+
+    player.oldX = player.x;
+    player.oldY = player.y;
+    player.xVel = 0;
+    player.yVel = 0;
+    player.direction = DIR_RIGHT;
     player.currentFrame = 0;
     player.animCounter = 0;
     player.isMoving = 0;
-
-    // Start grounded in level 1 and floating in level 2 as needed
     player.grounded = 0;
-
-    // Player starts each level with 3 lives
-    player.lives = 3;
-
-    // Short invincibility window after a hit / respawn
     player.invincibleTimer = 0;
+    player.onLadder = 0;
 }
 
-// Builds the combat level tilemap and collision map
+// Loads the exported tileset, tilemap, and prepares level 1 collision usage
 static void buildLevel1MapAndCollision(void) {
-    int x, y;
-
-    // Clear the visible tilemap first
+    // Clear out old level map data first
     clearScreenblock(LEVEL_SCREENBLOCK);
 
-    // Clear the collision map
-    for (y = 0; y < LEVEL1_MAP_H; y++) {
-        for (x = 0; x < LEVEL1_MAP_W; x++) {
-            collisionMap[y * LEVEL1_MAP_W + x] = 0;
-        }
-    }
+    // Load the background palette for the level tileset
+    loadBgPalette(tilesetPal, 16);
 
-    // Fill the visible screen with sky
-    for (y = 0; y < 20; y++) {
-        for (x = 0; x < 30; x++) {
-            SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[y * 32 + x] = TILE_SKY;
-        }
-    }
+    // Load the 4bpp tile graphics into the selected background charblock
+    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, 16384);
 
-    // Put a floor across the bottom
-    for (x = 0; x < 30; x++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[16 * 32 + x] = TILE_SOLID;
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[17 * 32 + x] = TILE_SOLID;
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[18 * 32 + x] = TILE_SOLID;
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[19 * 32 + x] = TILE_SOLID;
-    }
-
-    // Mark those floor rows as solid in the collision map
-    for (x = 0; x < LEVEL1_MAP_W; x++) {
-        collisionMap[16 * LEVEL1_MAP_W + x] = 1;
-        collisionMap[17 * LEVEL1_MAP_W + x] = 1;
-        collisionMap[18 * LEVEL1_MAP_W + x] = 1;
-        collisionMap[19 * LEVEL1_MAP_W + x] = 1;
-    }
-
-    // Add a few floating platforms
-    for (x = 4; x <= 10; x++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[12 * 32 + x] = TILE_PLATFORM;
-        collisionMap[12 * LEVEL1_MAP_W + x] = 1;
-    }
-
-    for (x = 16; x <= 24; x++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[10 * 32 + x] = TILE_PLATFORM;
-        collisionMap[10 * LEVEL1_MAP_W + x] = 1;
-    }
-
-    for (x = 8; x <= 13; x++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[8 * 32 + x] = TILE_PLATFORM;
-        collisionMap[8 * LEVEL1_MAP_W + x] = 1;
-    }
-
-    for (x = 20; x <= 26; x++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[14 * 32 + x] = TILE_PLATFORM;
-        collisionMap[14 * LEVEL1_MAP_W + x] = 1;
-    }
+    // Load the level 1 tilemap exported from Tiled into the level screenblock
+    loadMapToScreenblock(LEVEL_SCREENBLOCK, leveloneMap, leveloneLen / 2);
 }
 
 // Builds the star level background with wide scrolling
@@ -1388,8 +1344,9 @@ static void buildLevel2Map(void) {
 static void updateStart(void) {
     // Start the game on START press
     if (BUTTON_PRESSED(BUTTON_START)) {
-        initLevel1();
+        // Set state first so level 1 spawn logic works correctly.
         state = STATE_LEVEL1;
+        initLevel1();
         menuNeedsRedraw = 0;
     }
 }
@@ -1415,6 +1372,12 @@ static void updateLevel1(void) {
     updateEnemies();
     updateBalloonsLevel1();
     updatePlayerAnimation();
+
+    // Center the level 1 camera on the player while keeping the camera inside
+    // the 256x256 world bounds. HUD stays fixed on BG0.
+    level1HOff = CLAMP(player.x + player.width / 2 - SCREENWIDTH / 2, 0, LEVEL1_PIXEL_W - SCREENWIDTH);
+    level1VOff = CLAMP(player.y + player.height / 2 - SCREENHEIGHT / 2, 0, LEVEL1_PIXEL_H - SCREENHEIGHT);
+    setBackgroundOffset(1, level1HOff, level1VOff);
 
     // If all enemies are dead, reveal the door
     if (enemiesRemaining <= 0) {
@@ -1523,10 +1486,12 @@ static void updateLose(void) {
 // ======================================================
 
 // Level 1 player controls and physics
+// Level 1 player controls and physics using the exported collision bitmap
 static void updatePlayerLevel1(void) {
     int nextX;
     int nextY;
     int floatStrength;
+    int climbing = 0;
 
     // Save old position
     player.oldX = player.x;
@@ -1535,32 +1500,91 @@ static void updatePlayerLevel1(void) {
     // Default movement state
     player.isMoving = 0;
 
+    // Check whether the player is currently overlapping ladder pixels
+    player.onLadder = rectTouchesColor(player.x, player.y, player.width, player.height, CM_LADDER);
+
     // Horizontal movement
+    // Move left with a small step-up assist for bridge/platform edges.
     if (BUTTON_HELD(BUTTON_LEFT)) {
-        nextX = player.x - 2;
-        if (canMoveTo(nextX, player.y, player.width, player.height)) {
-            player.x = nextX;
+        int i;
+        for (i = 0; i < 2; i++) {
+            nextX = player.x - 1;
+
+            if (canMoveTo(nextX, player.y, player.width, player.height)) {
+                player.x = nextX;
+            } else if (canMoveTo(nextX, player.y - 1, player.width, player.height)) {
+                // Allow the player to step up by 1 pixel onto edges like bridges.
+                player.x = nextX;
+                player.y -= 1;
+            } else {
+                break;
+            }
         }
+
         player.direction = DIR_LEFT;
         player.isMoving = 1;
     }
 
+    // Move right with a small step-up assist for bridge/platform edges.
     if (BUTTON_HELD(BUTTON_RIGHT)) {
-        nextX = player.x + 2;
-        if (canMoveTo(nextX, player.y, player.width, player.height)) {
-            player.x = nextX;
+        int i;
+        for (i = 0; i < 2; i++) {
+            nextX = player.x + 1;
+
+            if (canMoveTo(nextX, player.y, player.width, player.height)) {
+                player.x = nextX;
+            } else if (canMoveTo(nextX, player.y - 1, player.width, player.height)) {
+                // Allow the player to step up by 1 pixel onto edges like bridges.
+                player.x = nextX;
+                player.y -= 1;
+            } else {
+                break;
+            }
         }
+
         player.direction = DIR_RIGHT;
         player.isMoving = 1;
     }
 
-    // Float upward when A is pressed or held
-    // Higher lives = stronger float as required by the PDF
-    if (BUTTON_HELD(BUTTON_A) && player.lives > 0) {
-        floatStrength = 1 + player.lives;
-        player.yVel -= floatStrength / 2;
-        if (player.yVel < -4) {
-            player.yVel = -4;
+    // Ladder movement
+    if (player.onLadder) {
+        if (BUTTON_HELD(BUTTON_UP)) {
+            nextY = player.y - 2;
+            if (canMoveTo(player.x, nextY, player.width, player.height)) {
+                player.y = nextY;
+            }
+            player.yVel = 0;
+            climbing = 1;
+            player.isMoving = 1;
+        } else if (BUTTON_HELD(BUTTON_DOWN)) {
+            nextY = player.y + 2;
+            if (canMoveTo(player.x, nextY, player.width, player.height)) {
+                player.y = nextY;
+            }
+            player.yVel = 0;
+            climbing = 1;
+            player.isMoving = 1;
+        }
+    }
+
+    // Hold A to float upward.
+    // This gives a soft balloon-like jump that still feels affected by gravity.
+    if (BUTTON_HELD(BUTTON_A) && !climbing) {
+        player.yVel -= 2;
+
+        // Cap upward speed so it does not become too strong.
+        if (player.yVel < -6) {
+            player.yVel = -6;
+        }
+    }
+
+    // Apply gravity unless actively climbing.
+    if (!climbing) {
+        player.yVel += 1;
+
+        // Cap downward speed so falling looks natural and controllable.
+        if (player.yVel > 4) {
+            player.yVel = 4;
         }
     }
 
@@ -1569,13 +1593,15 @@ static void updatePlayerLevel1(void) {
         firePlayerBullet();
     }
 
-    // Gravity
-    player.yVel += 1;
-    if (player.yVel > 3) {
-        player.yVel = 3;
+    // Apply gravity unless actively climbing
+    if (!climbing) {
+        player.yVel += 1;
+        if (player.yVel > 3) {
+            player.yVel = 3;
+        }
     }
 
-    // Vertical movement one pixel at a time for cleaner collisions
+    // Move vertically one pixel at a time for smoother collision handling.
     if (player.yVel != 0) {
         int step = (player.yVel > 0) ? 1 : -1;
         int amount = absInt(player.yVel);
@@ -1588,25 +1614,41 @@ static void updatePlayerLevel1(void) {
                 player.y = nextY;
                 player.grounded = 0;
             } else {
+                // If falling, we landed on the ground/platform.
                 if (step > 0) {
                     player.grounded = 1;
                 }
+
+                // Stop movement when we hit something above or below.
                 player.yVel = 0;
                 break;
             }
         }
     }
 
-    // Keep player inside the visible area for level 1
-    player.x = CLAMP(player.x, 0, SCREENWIDTH - player.width);
-    player.y = CLAMP(player.y, 0, SCREENHEIGHT - player.height);
+    // Keep the player inside the full level 1 world, not just the 240x160
+    // visible camera window.
+    player.x = CLAMP(player.x, 0, LEVEL1_PIXEL_W - player.width);
+    player.y = CLAMP(player.y, 0, LEVEL1_PIXEL_H - player.height);
 
-    // Check if standing on solid ground
-    if (isSolidPixel(player.x + 2, player.y + player.height + 1) ||
-        isSolidPixel(player.x + player.width - 3, player.y + player.height + 1)) {
+    // Grounded check
+    if (isSolidPixel(player.x + 2, player.y + player.height) ||
+        isSolidPixel(player.x + player.width - 3, player.y + player.height)) {
         player.grounded = 1;
     } else {
         player.grounded = 0;
+    }
+
+    // Red collision = instant damage / death zone
+    if (rectTouchesColor(player.x, player.y, player.width, player.height, CM_KILL)) {
+        damagePlayer();
+        return;
+    }
+
+    // Green collision reserved for later
+    // This makes it easy to add a win object later
+    if (rectTouchesColor(player.x, player.y, player.width, player.height, CM_GOAL)) {
+        // TODO: hook this up to your future win/transition condition
     }
 }
 
@@ -1685,6 +1727,8 @@ static void firePlayerBullet(void) {
             playerBullets[i].oldY = playerBullets[i].y;
             playerBullets[i].xVel = (player.direction == DIR_RIGHT) ? 4 : -4;
             playerBullets[i].yVel = 0;
+            playerBullets[i].width = 8;
+            playerBullets[i].height = 8;
             break;
         }
     }
@@ -1800,26 +1844,38 @@ static void updateEnemies(void) {
         // Phase 1: floating enemy with bullets
         // ----------------------------------------
         if (enemies[i].phase == ENEMY_FLOATING) {
-            // Move horizontally between min and max bounds
-            enemies[i].x += enemies[i].xVel;
+            int nextX = enemies[i].x + enemies[i].xVel;
+            int nextY = enemies[i].y;
 
-            if (enemies[i].x <= enemies[i].minX) {
-                enemies[i].x = enemies[i].minX;
+            // Floating enemies still respect world collision, so they cannot
+            // drift through platforms or walls.
+            if ((frameCount + i * 7) % 24 < 12) {
+                nextY--;
+            } else {
+                nextY++;
+            }
+
+            if (nextX <= enemies[i].minX) {
+                nextX = enemies[i].minX;
                 enemies[i].xVel = 1;
                 enemies[i].direction = DIR_RIGHT;
             }
 
-            if (enemies[i].x >= enemies[i].maxX) {
-                enemies[i].x = enemies[i].maxX;
+            if (nextX >= enemies[i].maxX) {
+                nextX = enemies[i].maxX;
                 enemies[i].xVel = -1;
                 enemies[i].direction = DIR_LEFT;
             }
 
-            // Small bobbing motion
-            if ((frameCount + i * 7) % 24 < 12) {
-                enemies[i].y--;
+            if (canMoveTo(nextX, enemies[i].y, enemies[i].width, enemies[i].height)) {
+                enemies[i].x = nextX;
             } else {
-                enemies[i].y++;
+                enemies[i].xVel = -enemies[i].xVel;
+                enemies[i].direction = (enemies[i].xVel > 0) ? DIR_RIGHT : DIR_LEFT;
+            }
+
+            if (canMoveTo(enemies[i].x, nextY, enemies[i].width, enemies[i].height)) {
+                enemies[i].y = nextY;
             }
 
             // Shooting timer
@@ -1831,7 +1887,7 @@ static void updateEnemies(void) {
 
             // Contact damage in phase 1
             if (collision(enemies[i].x, enemies[i].y, enemies[i].width, enemies[i].height,
-                          player.x, player.y, player.width, player.height)) {
+                        player.x, player.y, player.width, player.height)) {
                 damagePlayer();
             }
         }
@@ -1850,7 +1906,7 @@ static void updateEnemies(void) {
                 enemies[i].y += 2;
 
                 // If enemy falls off the visible combat area, treat it as dead
-                if (enemies[i].y > SCREENHEIGHT) {
+                if (enemies[i].y > LEVEL1_PIXEL_H) {
                     enemies[i].phase = ENEMY_DEAD;
                     enemies[i].active = 0;
                     enemiesRemaining--;
@@ -1998,8 +2054,14 @@ static void damagePlayer(void) {
 
     // Respawn position depends on the current level
     if (state == STATE_LEVEL1) {
-        player.x = PLAYER_START_X;
-        player.y = PLAYER_START_Y;
+        // Always respawn at the bottom-left safe ground spawn for level 1
+        player.x = 8;
+        player.y = findLowestGroundYAtX(player.x, player.width, player.height);
+
+        if (player.y < 0) {
+            player.y = LEVEL1_PIXEL_H - 24 - player.height;
+        }
+
         player.yVel = 0;
     } else if (state == STATE_LEVEL2) {
         player.x = CLAMP(player.x - 24, 0, LEVEL2_PIXEL_W - player.width);
@@ -2011,39 +2073,104 @@ static void damagePlayer(void) {
 //                  COLLISION / PHYSICS HELPERS
 // ======================================================
 
-// Checks whether a tile in level 1 is solid
-static int isSolidTile(int tileX, int tileY) {
-    // Treat out-of-bounds as solid on the sides / below
-    if (tileX < 0 || tileX >= LEVEL1_MAP_W || tileY < 0 || tileY >= LEVEL1_MAP_H) {
-        return 1;
+// Reads one pixel's collision value from the exported 256x256 collision bitmap
+static u8 getCollisionPixel(int x, int y) {
+    const u8* collisionData = (const u8*) leveloneBitmap;
+
+    // Treat out-of-bounds as blocked
+    if (x < 0 || x >= 256 || y < 0 || y >= 256) {
+        return CM_BLOCKED;
     }
 
-    return collisionMap[tileY * LEVEL1_MAP_W + tileX];
+    return collisionData[OFFSET(x, y, 256)];
 }
 
-// Checks whether a pixel location is solid in level 1
 static int isSolidPixel(int x, int y) {
-    return isSolidTile(x / 8, y / 8);
+    return getCollisionPixel(x, y) == CM_BLOCKED;
+}
+
+static int isLadderPixel(int x, int y) {
+    return getCollisionPixel(x, y) == CM_LADDER;
+}
+
+static int isHazardPixel(int x, int y) {
+    return getCollisionPixel(x, y) == CM_KILL;
+}
+
+static int isGoalPixel(int x, int y) {
+    return getCollisionPixel(x, y) == CM_GOAL;
+}
+
+// Checks a rectangle against a specific collision color
+static int rectTouchesColor(int x, int y, int width, int height, u8 color) {
+    if (getCollisionPixel(x + 2, y + 2) == color) return 1;
+    if (getCollisionPixel(x + width - 3, y + 2) == color) return 1;
+    if (getCollisionPixel(x + 2, y + height - 3) == color) return 1;
+    if (getCollisionPixel(x + width - 3, y + height - 3) == color) return 1;
+    if (getCollisionPixel(x + width / 2, y + height / 2) == color) return 1;
+    return 0;
 }
 
 // Checks whether a rectangle can occupy a position
+// Checks whether a rectangle can occupy a position in the collision map.
 static int canMoveTo(int x, int y, int width, int height) {
-    // Check the corners of the rectangle
-    if (isSolidPixel(x, y)) return 0;
-    if (isSolidPixel(x + width - 1, y)) return 0;
-    if (isSolidPixel(x, y + height - 1)) return 0;
-    if (isSolidPixel(x + width - 1, y + height - 1)) return 0;
+    int left = x + 1;
+    int right = x + width - 2;
+    int top = y + 1;
+    int bottom = y + height - 2;
+    int midX = x + width / 2;
+    int midY = y + height / 2;
+
+    // Top edge
+    if (isSolidPixel(left, top)) return 0;
+    if (isSolidPixel(midX, top)) return 0;
+    if (isSolidPixel(right, top)) return 0;
+
+    // Bottom edge
+    if (isSolidPixel(left, bottom)) return 0;
+    if (isSolidPixel(midX, bottom)) return 0;
+    if (isSolidPixel(right, bottom)) return 0;
+
+    // Side middles
+    if (isSolidPixel(left, midY)) return 0;
+    if (isSolidPixel(right, midY)) return 0;
 
     return 1;
 }
 
-// Finds the nearest ground below a falling enemy
 static int findGroundYBelow(int x, int y, int width, int height) {
     int scanY;
 
-    for (scanY = y + height; scanY < SCREENHEIGHT; scanY++) {
+    for (scanY = y + height; scanY < 256; scanY++) {
         if (isSolidPixel(x + 2, scanY) || isSolidPixel(x + width - 3, scanY)) {
             return scanY - height;
+        }
+    }
+
+    return -1;
+}
+
+// Finds the lowest safe standable ground at a given x position.
+// This avoids spawning on an upper platform and also avoids hazard overlap.
+static int findLowestGroundYAtX(int x, int width, int height) {
+    int scanY;
+
+    for (scanY = LEVEL1_PIXEL_H - 1; scanY >= height; scanY--) {
+        int leftSolid = isSolidPixel(x + 2, scanY);
+        int rightSolid = isSolidPixel(x + width - 3, scanY);
+
+        int leftAboveOpen = !isSolidPixel(x + 2, scanY - 1);
+        int rightAboveOpen = !isSolidPixel(x + width - 3, scanY - 1);
+
+        if ((leftSolid || rightSolid) && leftAboveOpen && rightAboveOpen) {
+            int candidateY = scanY - height;
+
+            // Only accept this spawn if the player's body would not overlap
+            // a kill area and the rectangle fits in empty space.
+            if (canMoveTo(x, candidateY, width, height)
+                && !rectTouchesColor(x, candidateY, width, height, CM_KILL)) {
+                return candidateY;
+            }
         }
     }
 
@@ -2062,6 +2189,7 @@ static void drawLevel1(void) {
 
     // Draw gameplay sprites
     drawSpritesLevel1();
+    DMANow(3, shadowOAM, OAM, 128*4);
 }
 
 // Draws level 2
@@ -2072,6 +2200,7 @@ static void drawLevel2(void) {
 
     // Draw gameplay sprites with horizontal scroll adjustment
     drawSpritesLevel2();
+    DMANow(3, shadowOAM, OAM, 128*4);
 }
 
 // Draws all level 1 sprites
@@ -2080,13 +2209,13 @@ static void drawSpritesLevel1(void) {
     int oamIndex = 0;
 
     // Draw the player
-    drawPlayerSprite(player.x, player.y);
+    drawPlayerSprite(player.x - level1HOff, player.y - level1VOff);
     oamIndex = 1;
 
     // Draw enemies
     for (i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].active) {
-            drawEnemySprite(oamIndex, enemies[i].x, enemies[i].y);
+            drawEnemySprite(oamIndex, enemies[i].x - level1HOff, enemies[i].y - level1VOff);
             oamIndex++;
         }
     }
@@ -2094,7 +2223,7 @@ static void drawSpritesLevel1(void) {
     // Draw player bullets
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         if (playerBullets[i].active) {
-            drawBulletSprite(oamIndex, playerBullets[i].x, playerBullets[i].y, 0);
+            drawBulletSprite(oamIndex, playerBullets[i].x - level1HOff, playerBullets[i].y - level1VOff, 0);
             oamIndex++;
         }
     }
@@ -2102,7 +2231,7 @@ static void drawSpritesLevel1(void) {
     // Draw enemy bullets
     for (i = 0; i < MAX_ENEMY_BULLETS; i++) {
         if (enemyBullets[i].active) {
-            drawBulletSprite(oamIndex, enemyBullets[i].x, enemyBullets[i].y, 1);
+            drawBulletSprite(oamIndex, enemyBullets[i].x - level1HOff, enemyBullets[i].y - level1VOff, 1);
             oamIndex++;
         }
     }
@@ -2110,14 +2239,14 @@ static void drawSpritesLevel1(void) {
     // Draw balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x, balloons[i].y);
+            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff);
             oamIndex++;
         }
     }
 
     // Draw door if visible
     if (doorVisible) {
-        drawDoorSprite(doorX, doorY);
+        drawDoorSprite(doorX - level1HOff, doorY - level1VOff);
         oamIndex++;
     }
 
@@ -2178,19 +2307,22 @@ static void drawPlayerSprite(int screenX, int screenY) {
 }
 
 // Draws an enemy sprite
-static void drawEnemySprite(int i, int screenX, int screenY) {
+static void drawEnemySprite(int oamIndex, int screenX, int screenY) {
+    Enemy* e = &enemies[oamIndex - 1];
     int tileBase;
 
-    if (enemies[i - 1].phase == ENEMY_FLOATING) {
-        tileBase = enemies[i - 1].currentFrame ? OBJ_TILE_ENEMYF1 : OBJ_TILE_ENEMYF0;
+    if (e->phase == ENEMY_FLOATING) {
+        tileBase = e->currentFrame ? OBJ_TILE_ENEMYF1 : OBJ_TILE_ENEMYF0;
     } else {
-        tileBase = enemies[i - 1].currentFrame ? OBJ_TILE_ENEMYW1 : OBJ_TILE_ENEMYW0;
+        tileBase = e->currentFrame ? OBJ_TILE_ENEMYW1 : OBJ_TILE_ENEMYW0;
     }
 
-    shadowOAM[i].attr0 = ATTR0_Y(screenY) | ATTR0_REGULAR | ATTR0_4BPP | ATTR0_SQUARE;
-    shadowOAM[i].attr1 = ATTR1_X(screenX) | ATTR1_SMALL |
-                         ((enemies[i - 1].direction == DIR_LEFT) ? ATTR1_HFLIP : 0);
-    shadowOAM[i].attr2 = ATTR2_TILEID(tileBase, 0) | ATTR2_PRIORITY(0) | ATTR2_PALROW(0);
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_REGULAR | ATTR0_4BPP | ATTR0_SQUARE;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_SMALL |
+        ((e->direction == DIR_LEFT) ? ATTR1_HFLIP : 0);
+
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase, 0) |
+        ATTR2_PRIORITY(0) | ATTR2_PALROW(0);
 }
 
 // Draws a bullet sprite
@@ -2229,7 +2361,7 @@ static void drawDoorSprite(int screenX, int screenY) {
 static void hideUnusedSpritesFrom(int startIndex) {
     int i;
 
-    for (i = startIndex; i < 127; i++) {
+    for (i = startIndex; i < 128; i++) {
         shadowOAM[i].attr0 = ATTR0_HIDE;
         shadowOAM[i].attr1 = 0;
         shadowOAM[i].attr2 = 0;
