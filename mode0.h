@@ -31,6 +31,10 @@
 #define BG_SIZE_TALL      (2 << 14)
 #define BG_SIZE_LARGE     (3 << 14)
 
+#define SPRITE_MODE_1D (1 << 6)
+
+//extern OBJ_ATTR shadowOAM[128];
+
 // Character blocks store tiles
 typedef struct {
     u16 tileimg[8192];
