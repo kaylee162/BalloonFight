@@ -683,15 +683,23 @@ int absInt(int x) {
 }
 
 int getFloatVelocityForLives(int lives) {
-    if (lives >= 3) {
-        return PLAYER_FLOAT_THREE_LIVES;
-    } else if (lives == 2) {
-        return PLAYER_FLOAT_TWO_LIVES;
-    } else if (lives == 1) {
-        return PLAYER_FLOAT_ONE_LIFE;
+    // More lives = stronger/faster upward flight.
+    //
+    // IMPORTANT:
+    // Upward movement uses NEGATIVE y velocity in this project.
+    // So 3 lives should be the most negative (fastest upward).
+    //
+    // You can tweak these a little if needed, but this gives a clearly
+    // noticeable difference between 1, 2, and 3 lives.
+    switch (lives) {
+        case 3:
+            return -4;   // fastest upward
+        case 2:
+            return -3;   // medium upward
+        case 1:
+        default:
+            return -2;   // weakest upward
     }
-
-    return 0;
 }
 
 // ======================================================
