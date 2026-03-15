@@ -19,12 +19,11 @@
 #define PLAYER_HEIGHT 16
 
 // Level 1 collision map color indices
-#define CM_BLOCKED 0   // black
-#define CM_OPEN    1   // white
-#define CM_KILL    2   // red
-#define CM_GOAL    3   // green
+#define CM_BLOCKED 0
+#define CM_OPEN    1
+#define CM_KILL    2
+#define CM_GOAL    3
 
-// Shared gameplay constants used across game.c and level logic files
 #define CLAMP(value, min, max) ((value) < (min) ? (min) : ((value) > (max) ? (max) : (value)))
 
 #define LEVEL1_MAP_W 32
@@ -76,17 +75,18 @@
 #define PLAYER_FLOAT_THREE_LIVES  -8
 #define PLAYER_GRAVITY             1
 #define PLAYER_MAX_FALL_SPEED      4
-// Game states required by the assignment PDF
+
 typedef enum {
     STATE_START,
+    STATE_LEVEL1_INTRO,
     STATE_LEVEL1,
+    STATE_LEVEL2_INTRO,
     STATE_LEVEL2,
     STATE_PAUSE,
     STATE_WIN,
     STATE_LOSE
 } GameState;
 
-// Generic projectile
 typedef struct {
     int x;
     int y;
@@ -99,7 +99,6 @@ typedef struct {
     int active;
 } Bullet;
 
-// Balloon collectible
 typedef struct {
     int x;
     int y;
@@ -108,7 +107,6 @@ typedef struct {
     int active;
 } Balloon;
 
-// Star hazard for level 2
 typedef struct {
     int x;
     int y;
@@ -121,14 +119,12 @@ typedef struct {
     int active;
 } Star;
 
-// Enemy phases for level 1
 typedef enum {
     ENEMY_FLOATING,
     ENEMY_WALKING,
     ENEMY_DEAD
 } EnemyPhase;
 
-// Enemy object
 typedef struct {
     int x;
     int y;
@@ -145,10 +141,9 @@ typedef struct {
     int shootTimer;
     int animCounter;
     int currentFrame;
-    EnemyPhase phase;
+    int phase;
 } Enemy;
 
-// Player object
 typedef struct {
     int x;
     int y;
@@ -165,11 +160,12 @@ typedef struct {
     int grounded;
     int lives;
     int invincibleTimer;
+    int floatBoostTimer;
 } Player;
 
-
-// Shared global game data used by level-specific source files
+// Shared global game data
 extern GameState state;
+extern GameState pausedState;
 extern Player player;
 extern Bullet playerBullets[MAX_PLAYER_BULLETS];
 extern Bullet enemyBullets[MAX_ENEMY_BULLETS];
@@ -188,7 +184,7 @@ extern int doorX;
 extern int doorY;
 extern int frameCount;
 
-// Shared helpers used by the level-specific source files
+// Shared helpers
 void clearHUD(void);
 void drawHUD(void);
 void resetPlayerForCurrentLevel(void);
