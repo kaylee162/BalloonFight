@@ -36,6 +36,7 @@ void initLevel1(void) {
 
     enemiesRemaining = MAX_ENEMIES;
     doorVisible = 0;
+    doorOpen = 0;
 
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         playerBullets[i].active = 0;
@@ -79,7 +80,6 @@ void initLevel1(void) {
     enemies[2].minX = 88;
     enemies[2].maxX = 168;
     enemies[2].direction = DIR_RIGHT;
-    enemies[2].phase = ENEMY_WALKING;
 
     enemies[3].x = 208;
     enemies[3].y = 112;
@@ -87,12 +87,12 @@ void initLevel1(void) {
     enemies[3].minX = 184;
     enemies[3].maxX = 232;
     enemies[3].direction = DIR_LEFT;
-    enemies[3].phase = ENEMY_WALKING;
 
     for (i = 0; i < MAX_BALLOONS; i++) {
         balloons[i].active = 0;
         balloons[i].width = 8;
         balloons[i].height = 16;
+        balloons[i].spriteVariant = nextRandomSpriteVariant();
     }
 
     balloons[0].x = 36;  balloons[0].y = 144; balloons[0].active = 1;
@@ -116,8 +116,9 @@ void buildLevel1MapAndCollision(void) {
     (void)collisionMapOneBitmap;
 
     // Door position stays the same. It becomes visible after all enemies are defeated.
-    doorX = 224;
-    doorY = 96;
+    // GO HERE TO UPDAYE DOOR LOCATION
+    doorX = 200;
+    doorY = 192;
 
     // No manual collision grid build is needed because the bitmap already defines collision.
     // Leave this function in place so the rest of the game can still call it the same way.
@@ -155,10 +156,20 @@ void updateLevel1(void) {
         doorVisible = 1;
     }
 
-    if (doorVisible && collision(player.x, player.y, player.width, player.height, doorX, doorY, 16, 16)) {
-        state = STATE_LEVEL2_INTRO;
-        menuNeedsRedraw = 1;
-        return;
+    if (doorVisible) {
+        // Door is 32x32 pixels (4 tiles wide x 4 tiles tall)
+        if (collision(player.x, player.y, player.width, player.height,
+                      doorX, doorY, 32, 32)) {
+            if (!doorOpen) {
+                // First contact: open the door
+                doorOpen = 1;
+            } else {
+                // Second contact while open: enter and advance to level 2
+                state = STATE_LEVEL2_INTRO;
+                menuNeedsRedraw = 1;
+                return;
+            }
+        }
     }
 
     if (player.lives <= 0) {
@@ -182,15 +193,18 @@ void updatePlayerLevel1(void) {
     // Move left with a small step-up assist for bridge/platform edges.
     if (BUTTON_HELD(BUTTON_LEFT)) {
         int i;
+        int steppedUp = 0;
         for (i = 0; i < 2; i++) {
             nextX = player.x - 1;
 
             if (canMoveTo(nextX, player.y, player.width, player.height)) {
                 player.x = nextX;
-            } else if (canMoveTo(nextX, player.y - 1, player.width, player.height)) {
-                // Allow the player to step up by 1 pixel onto edges like bridges.
+            } else if (player.grounded && !steppedUp &&
+                       canMoveTo(nextX, player.y - 1, player.width, player.height)) {
+                // Only step up once per frame and only when grounded on a platform edge.
                 player.x = nextX;
                 player.y -= 1;
+                steppedUp = 1;
             } else {
                 break;
             }
@@ -200,18 +214,20 @@ void updatePlayerLevel1(void) {
         player.isMoving = 1;
     }
 
-    // Move right with a small step-up assist for bridge/platform edges.
     if (BUTTON_HELD(BUTTON_RIGHT)) {
         int i;
+        int steppedUp = 0;
         for (i = 0; i < 2; i++) {
             nextX = player.x + 1;
 
             if (canMoveTo(nextX, player.y, player.width, player.height)) {
                 player.x = nextX;
-            } else if (canMoveTo(nextX, player.y - 1, player.width, player.height)) {
-                // Allow the player to step up by 1 pixel onto edges like bridges.
+            } else if (player.grounded && !steppedUp &&
+                       canMoveTo(nextX, player.y - 1, player.width, player.height)) {
+                // Only step up once per frame and only when grounded on a platform edge.
                 player.x = nextX;
                 player.y -= 1;
+                steppedUp = 1;
             } else {
                 break;
             }
@@ -385,8 +401,7 @@ void drawSpritesLevel1(void) {
     // Enemies
     for (i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].active) {
-            drawEnemySprite(oamIndex, enemies[i].x - level1HOff, enemies[i].y - level1VOff);
-            oamIndex++;
+            drawEnemySprite(i, oamIndex, enemies[i].x - level1HOff, enemies[i].y - level1VOff);            oamIndex++;
         }
     }
 
@@ -409,7 +424,7 @@ void drawSpritesLevel1(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff);
+            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff, balloons[i].spriteVariant);
             oamIndex++;
         }
     }

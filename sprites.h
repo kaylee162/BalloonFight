@@ -74,7 +74,7 @@ struct oam_attrs {
 #define ATTR1_LARGE   (3<<14)       // Bits E-F: Size, large
 
 // Attribute 2
-#define ATTR2_TILEID(x, y) ((OFFSET(x, y, 32)) & 0x3FF)  // Bits 0-9: Tile ID
+#define ATTR2_TILEID(id)   ((id) & 0x3FF)                 // Bits 0-9: Tile ID (flat 1D tile index)
 #define ATTR2_PRIORITY(num)    (((num) & 3) << 10) // Bits A-B: Priority
 #define ATTR2_PALROW(y)      (((y) & 0xF) <<12)    // Bits C-F: Palette row (4bpp)
 

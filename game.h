@@ -52,17 +52,13 @@
 
 #define FONT_BASE_TILE 32
 
-#define OBJ_TILE_PLAYER0    0
-#define OBJ_TILE_PLAYER1    4
-#define OBJ_TILE_ENEMYF0    8
-#define OBJ_TILE_ENEMYF1    12
-#define OBJ_TILE_ENEMYW0    16
-#define OBJ_TILE_ENEMYW1    20
-#define OBJ_TILE_BULLET     24
-#define OBJ_TILE_EBULLET    25
-#define OBJ_TILE_BALLOON    26
-#define OBJ_TILE_STAR       28
-#define OBJ_TILE_DOOR       32
+#define OBJ_TILE_BULLET          24
+#define OBJ_TILE_EBULLET         25
+#define OBJ_TILE_BALLOON         26
+#define OBJ_TILE_STAR            28
+#define OBJ_TILE_DOOR_CLOSED     400
+#define OBJ_TILE_DOOR_OPEN_TOP   416
+#define OBJ_TILE_DOOR_OPEN_BOT   432
 
 #define DIR_LEFT  0
 #define DIR_RIGHT 1
@@ -105,6 +101,7 @@ typedef struct {
     int width;
     int height;
     int active;
+    int spriteVariant;
 } Balloon;
 
 typedef struct {
@@ -180,6 +177,7 @@ extern int level1VOff;
 extern int level2HOff;
 extern int menuNeedsRedraw;
 extern int doorVisible;
+extern int doorOpen;
 extern int doorX;
 extern int doorY;
 extern int frameCount;
@@ -194,13 +192,14 @@ void updatePlayerBullets(void);
 void updateEnemyBullets(void);
 void updateEnemies(void);
 void drawPlayerSprite(int screenX, int screenY);
-void drawEnemySprite(int oamIndex, int screenX, int screenY);
+void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 void hideUnusedSpritesFrom(int startIndex);
 void damagePlayer(void);
+int nextRandomSpriteVariant(void);
 
 u8 getCollisionPixel(int x, int y);
 int isSolidPixel(int x, int y);
