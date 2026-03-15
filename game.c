@@ -10,6 +10,7 @@
 #include "levelone.h"
 #include "leveltwo.h"
 #include "collisionMapOne.h"
+#include "collisionMapTwo.h"
 #include "spriteSheet.h"
 
 #include "screen.h"
@@ -74,7 +75,6 @@
 #define OBJ_TILE_PLAYER_DOWN    192
 
 #define OBJ_TILE_ENEMY          256
-#define OBJ_TILE_BALLOON        304
 
 // Player directions
 #define DIR_LEFT  0
@@ -112,6 +112,7 @@ int enemiesRemaining;
 int level1HOff;
 int level1VOff;
 int level2HOff;
+int level2VOff;
 int menuNeedsRedraw;
 
 // Door state for finishing level 1
@@ -125,6 +126,15 @@ int frameCount;
 
 // Small pseudo-random state used for balloon color selection
 static unsigned int spriteRngState = 0xA341316Cu;
+
+// Defer level VRAM/tilemap initialization until draw time.
+// This prevents intro-screen glitches when switching states.
+static int pendingLevel1Load = 0;
+static int pendingLevel2Load = 0;
+
+static void clearObjTileIndex(int tileIndex);
+static void buildSimpleStarTile(int tileIndex);
+static void setObjTilePixel4bpp(int tileIndex, int x, int y, unsigned char colorIndex);
 
 // ======================================================
 //                   FORWARD DECLARATIONS
@@ -278,6 +288,10 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL1:
+            if (pendingLevel1Load) {
+                initLevel1();
+                pendingLevel1Load = 0;
+            }
             drawLevel1();
             break;
 
@@ -289,6 +303,10 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL2:
+            if (pendingLevel2Load) {
+                initLevel2();
+                pendingLevel2Load = 0;
+            }
             drawLevel2();
             break;
 
@@ -328,14 +346,18 @@ static void updateStart(void) {
 
 static void updateLevel1Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        initLevel1();
+        // Do NOT initialize the level here.
+        // updateGame() runs before waitForVBlank(), so touching VRAM here can glitch.
+        pendingLevel1Load = 1;
         state = STATE_LEVEL1;
     }
 }
 
 static void updateLevel2Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        initLevel2();
+        // Do NOT initialize the level here.
+        // Defer the actual VRAM/tilemap setup until drawGame(), after VBlank.
+        pendingLevel2Load = 1;
         state = STATE_LEVEL2;
     }
 }
@@ -369,6 +391,8 @@ static void updateLose(void) {
 // ======================================================
 
 void resetPlayerForCurrentLevel(void) {
+    int spawnGroundY;
+
     player.width = PLAYER_WIDTH;
     player.height = PLAYER_HEIGHT;
     player.oldX = PLAYER_START_X;
@@ -383,18 +407,14 @@ void resetPlayerForCurrentLevel(void) {
     player.floatBoostTimer = 0;
 
     if (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO) {
-        // Level 2 is an open float stage, so its spawn can stay hardcoded.
-        player.x = 16;
-        player.y = 70;
+        // Spawn on top of the left-most platform in level 2.
+        // Using collision keeps the spawn correct even if the art changes later.
+        player.x = 24;
+        spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
+        player.y = (spawnGroundY >= 0) ? spawnGroundY : 28;
     } else {
-        int spawnGroundY;
-
-        // Level 1 should use the same collision-based spawn placement as respawn.
-        // This prevents the player from starting embedded inside the platform.
+        // Level 1 keeps its collision-based spawn.
         player.x = PLAYER_START_X;
-
-        // Scan downward for the first solid ground under the spawn X and place
-        // the player just above it.
         spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
         player.y = (spawnGroundY >= 0) ? spawnGroundY : PLAYER_START_Y;
     }
@@ -684,12 +704,8 @@ void damagePlayer(void) {
     player.yVel = 0;
     player.xVel = 0;
     player.grounded = 0;
-
-    // Clear any leftover jump/float boost from the previous life so the respawn
-    // starts in a clean physics state.
     player.floatBoostTimer = 0;
 
-    // Respawn at the level's starting location
     if (state == STATE_LEVEL1) {
         player.x = PLAYER_START_X;
 
@@ -697,8 +713,10 @@ void damagePlayer(void) {
         spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
         player.y = (spawnGroundY >= 0) ? spawnGroundY : PLAYER_START_Y;
     } else if (state == STATE_LEVEL2) {
-        player.x = 16;
-        player.y = 70;
+        // Respawn on the left platform in level 2.
+        player.x = 24;
+        spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
+        player.y = (spawnGroundY >= 0) ? spawnGroundY : 28;
     }
 }
 
@@ -706,13 +724,46 @@ void damagePlayer(void) {
 //                    COLLISION HELPERS
 // ======================================================
 u8 getCollisionPixel(int x, int y) {
-    const u8* map = (const u8*) collisionMapOneBitmap;
+    int usingLevel2 = (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO ||
+                       pausedState == STATE_LEVEL2);
 
-    if (x < 0 || x >= 256 || y < 0 || y >= 256) {
-        return CM_BLOCKED;
+    if (usingLevel2) {
+        const u8* map = (const u8*) collisionMapTwoTiles;
+        int tileX;
+        int tileY;
+        int tileIndex;
+        int localX;
+        int localY;
+        int byteIndex;
+
+        if (x < 0 || x >= LEVEL2_PIXEL_W || y < 0 || y >= LEVEL2_PIXEL_H) {
+            return CM_BLOCKED;
+        }
+
+        // collisionMapTwo was exported as tiled 8bpp data.
+        // Convert pixel position into:
+        //   1) tile index
+        //   2) pixel offset inside that 8x8 tile
+        tileX = x >> 3;
+        tileY = y >> 3;
+        tileIndex = tileY * LEVEL2_MAP_W + tileX;
+
+        localX = x & 7;
+        localY = y & 7;
+
+        // 8x8 tile, 8bpp => 64 bytes per tile
+        byteIndex = tileIndex * 64 + localY * 8 + localX;
+
+        return map[byteIndex];
+    } else {
+        const u8* map = (const u8*) collisionMapOneBitmap;
+
+        if (x < 0 || x >= LEVEL1_PIXEL_W || y < 0 || y >= LEVEL1_PIXEL_H) {
+            return CM_BLOCKED;
+        }
+
+        return map[y * LEVEL1_PIXEL_W + x];
     }
-
-    return map[y * 256 + x];
 }
 
 int isSolidPixel(int x, int y) {
@@ -745,13 +796,19 @@ int rectTouchesColor(int x, int y, int width, int height, u8 color) {
 int canMoveTo(int x, int y, int width, int height) {
     int px;
     int py;
+    int maxWidth = (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO || pausedState == STATE_LEVEL2)
+        ? LEVEL2_PIXEL_W
+        : LEVEL1_PIXEL_W;
+    int maxHeight = (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO || pausedState == STATE_LEVEL2)
+        ? LEVEL2_PIXEL_H
+        : LEVEL1_PIXEL_H;
 
     // Reject if outside the playable map
-    if (x < 0 || y < 0 || x + width > LEVEL1_PIXEL_W || y + height > LEVEL1_PIXEL_H) {
+    if (x < 0 || y < 0 || x + width > maxWidth || y + height > maxHeight) {
         return 0;
     }
 
-    // Only blocked pixels stop movement.
+    // Only blocked pixels stop movement
     for (py = y; py < y + height; py++) {
         for (px = x; px < x + width; px++) {
             if (isSolidPixel(px, py)) {
@@ -765,9 +822,12 @@ int canMoveTo(int x, int y, int width, int height) {
 
 int findGroundYBelow(int x, int y, int width, int height) {
     int testY;
+    int maxHeight = (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO || pausedState == STATE_LEVEL2)
+        ? LEVEL2_PIXEL_H
+        : LEVEL1_PIXEL_H;
 
-    // Scan downward until the first blocked pixel row below the player
-    for (testY = y; testY < LEVEL1_PIXEL_H - height; testY++) {
+    // Scan downward until we hit solid ground
+    for (testY = y; testY < maxHeight - height; testY++) {
         if (!canMoveTo(x, testY, width, height)) {
             return testY - 1;
         }
@@ -1022,7 +1082,7 @@ static void restorePausedGameplayLayers(void) {
 
         // Restore the camera position from before pausing.
         setBackgroundOffset(0, 0, 0);
-        setBackgroundOffset(1, level2HOff, 0);
+        setBackgroundOffset(1, level2HOff, level2VOff);
 
         // Clear old pause text from the HUD map.
         clearHUD();
@@ -1099,8 +1159,8 @@ void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
 }
 
 void drawStarSprite(int oamIndex, int screenX, int screenY) {
-    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 8) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_STAR) | ATTR2_PALROW(0);
 }
 
@@ -1133,6 +1193,57 @@ void hideUnusedSpritesFrom(int startIndex) {
     }
 }
 
+static void setObjTilePixel4bpp(int tileIndex, int x, int y, unsigned char colorIndex) {
+    volatile unsigned short* dst;
+    int pixelIndex;
+    int halfwordIndex;
+    int shift;
+    unsigned short value;
+
+    if (x < 0 || x >= 8 || y < 0 || y >= 8) {
+        return;
+    }
+
+    dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
+
+    pixelIndex = y * 8 + x;
+    halfwordIndex = pixelIndex >> 2;          // 4 pixels per halfword
+    shift = (pixelIndex & 3) * 4;
+
+    value = dst[halfwordIndex];
+    value &= ~(0xF << shift);
+    value |= (colorIndex & 0xF) << shift;
+    dst[halfwordIndex] = value;
+}
+
+static void buildSimpleStarTile(int tileIndex) {
+    int x, y;
+
+    clearObjTileIndex(tileIndex);
+
+    // Small 8x8 white sparkle with dark outline.
+    // Uses palette row 0.
+    for (y = 0; y < 8; y++) {
+        for (x = 0; x < 8; x++) {
+            int dx = absInt(x - 3);
+            int dy = absInt(y - 3);
+
+            // Outline
+            if ((dx == 0 && dy <= 3) ||
+                (dy == 0 && dx <= 3) ||
+                (dx == dy && dx <= 2)) {
+                setObjTilePixel4bpp(tileIndex, x, y, 9);
+            }
+
+            // Fill
+            if ((dx == 0 && dy <= 2) ||
+                (dy == 0 && dx <= 2) ||
+                (dx == dy && dx <= 1)) {
+                setObjTilePixel4bpp(tileIndex, x, y, 1);
+            }
+        }
+    }
+}
 // ======================================================
 //                  GRAPHICS / TILE BUILDING
 // ======================================================
@@ -1385,33 +1496,27 @@ static void buildSpriteTiles(void) {
     // Each frame is 3x3 tiles.
     // There is one blank tile between frames horizontally.
     // So starts are x = 0, 4, 8, 12.
-    //
-    // Rows start at:
-    // right = y 0
-    // left  = y 4
-    // up    = y 8
-    // down  = y 12
     // --------------------------------------------------
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 0 * 16,  0,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 1 * 16,  3,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 2 * 16,  6,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 3 * 16,  9,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 1 * 16,  4,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 2 * 16,  8,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 3 * 16, 12,  0, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 0 * 16,  0,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 1 * 16,  3,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 2 * 16,  6,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 3 * 16,  9,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 1 * 16,  4,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 2 * 16,  8,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 3 * 16, 12,  4, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 0 * 16,  0,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 1 * 16,  3,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 2 * 16,  6,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 3 * 16,  9,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 1 * 16,  4,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 2 * 16,  8,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 3 * 16, 12,  8, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 0 * 16,  0, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 1 * 16,  3, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 2 * 16,  6, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 3 * 16,  9, 12, 3, 3);
-    
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 1 * 16,  4, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 2 * 16,  8, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 3 * 16, 12, 12, 3, 3);
+        
     // --------------------------------------------------
     // Balloons
     // These are 3x3 tiles each on tile row 17.
@@ -1458,11 +1563,9 @@ static void buildSpriteTiles(void) {
 
     // --------------------------------------------------
     // Star
-    // User-provided location:
-    // top-left = (0, 26)
-    // 3x3 tiles
+    // The star comes directly from the sprite sheet at tile (13,4).
     // --------------------------------------------------
-    copyFrameTo32x32Slot(OBJ_TILE_STAR, 0, 26, 3, 3);
+    copyObjTileRemapped(OBJ_TILE_STAR, 13, 4);
 
     // --------------------------------------------------
     // Door
