@@ -2,26 +2,27 @@
 #include "leveltwo_logic.h"
 #include "leveltwo.h"
 
+#include "tileset.h"
+
 void initLevel2(void) {
     int i;
 
-    // Reinitialize Mode 0
     initMode0();
 
-    // BG0 remains the HUD
-    // BG1 becomes a wide scrolling map for level 2
     setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
     setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_WIDE);
 
-    // Start at the left of the scrolling level
+    loadBgPalette(tilesetPal, tilesetPalLen / 2);
+    BG_PALETTE[240] = BLACK;
+    BG_PALETTE[241] = WHITE;
+    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
+
     level2HOff = 0;
     setBackgroundOffset(0, 0, 0);
     setBackgroundOffset(1, 0, 0);
 
-    // Build the level 2 tilemap
     buildLevel2Map();
 
-    // Reset bullets and enemies
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         playerBullets[i].active = 0;
         playerBullets[i].width = 8;
@@ -36,14 +37,12 @@ void initLevel2(void) {
         enemies[i].active = 0;
     }
 
-    // Initialize balloons for level 2
     for (i = 0; i < MAX_BALLOONS; i++) {
         balloons[i].active = 0;
         balloons[i].width = 8;
         balloons[i].height = 16;
     }
 
-    // Place 10 balloons across the level
     balloons[0].x = 50;   balloons[0].y = 40;   balloons[0].active = 1;
     balloons[1].x = 90;   balloons[1].y = 80;   balloons[1].active = 1;
     balloons[2].x = 140;  balloons[2].y = 34;   balloons[2].active = 1;
@@ -57,7 +56,6 @@ void initLevel2(void) {
 
     level2BalloonsRemaining = 10;
 
-    // Initialize vertically moving stars
     for (i = 0; i < MAX_STARS; i++) {
         stars[i].x = 70 + i * 55;
         stars[i].y = 28 + (i % 3) * 30;
@@ -70,10 +68,7 @@ void initLevel2(void) {
         stars[i].active = 1;
     }
 
-    // Reset player with 3 lives for the new level
     resetPlayerForCurrentLevel();
-
-    // Start the player near the beginning of the long level
     player.x = 16;
     player.y = 70;
 }
@@ -85,37 +80,32 @@ void buildLevel2Map(void) {
 }
 
 void updateLevel2(void) {
-    // Pause on START
     if (BUTTON_PRESSED(BUTTON_START)) {
+        pausedState = STATE_LEVEL2;
         state = STATE_PAUSE;
         menuNeedsRedraw = 1;
         return;
     }
 
-    // Update invincibility timer
     if (player.invincibleTimer > 0) {
         player.invincibleTimer--;
     }
 
-    // Update level 2 entities
     updatePlayerLevel2();
     updatePlayerBullets();
     updateStars();
     updateBalloonsLevel2();
     updatePlayerAnimation();
 
-    // Update scrolling based on player position
     level2HOff = CLAMP(player.x - 120, 0, LEVEL2_PIXEL_W - SCREENWIDTH);
     setBackgroundOffset(1, level2HOff, 0);
 
-    // Win when all 10 balloons have been collected
     if (level2BalloonsRemaining <= 0) {
         state = STATE_WIN;
         menuNeedsRedraw = 1;
         return;
     }
 
-    // Lose if out of lives
     if (player.lives <= 0) {
         state = STATE_LOSE;
         menuNeedsRedraw = 1;
@@ -157,15 +147,28 @@ void updatePlayerLevel2(void) {
         player.grounded = 0;
     }
 
-    // Press A to float upward based on remaining lives/balloons
-    // This works both from the ground and in the air
+        // Press A to float upward based on remaining lives/balloons.
+    // This works both from the ground and in the air.
     if (BUTTON_PRESSED(BUTTON_A) && player.lives > 0) {
         player.yVel = getFloatVelocityForLives(player.lives);
+
+        // Same short boost window used in level 1 so the float has a smoother,
+        // more noticeable arc and the difference by lives is easier to feel.
+        player.floatBoostTimer = player.lives + 1;
+
         player.grounded = 0;
         player.isMoving = 1;
     }
 
-    // Gravity always pulls the player downward when airborne
+    // Small multi-frame upward assist immediately after pressing A.
+    // This improves the shape of the jump/float arc without changing the
+    // downward fall behavior that already feels good.
+    if (!player.grounded && player.floatBoostTimer > 0 && player.yVel < 0) {
+        player.yVel--;
+        player.floatBoostTimer--;
+    }
+
+    // Gravity always pulls the player downward when airborne.
     if (!player.grounded) {
         player.yVel += PLAYER_GRAVITY;
 
@@ -174,9 +177,14 @@ void updatePlayerLevel2(void) {
         }
     }
 
-    // If grounded, do not keep downward velocity
+    // If grounded, do not keep downward velocity.
     if (player.grounded && player.yVel > 0) {
         player.yVel = 0;
+    }
+
+    // If grounded, clear any leftover upward boost.
+    if (player.grounded) {
+        player.floatBoostTimer = 0;
     }
 
     // Apply vertical movement one pixel at a time

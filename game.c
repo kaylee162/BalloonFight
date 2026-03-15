@@ -11,6 +11,8 @@
 #include "leveltwo.h"
 #include "collisionMapOne.h"
 
+#include "screen.h"
+
 // ======================================================
 //                       VRAM HELPERS
 // ======================================================
@@ -86,6 +88,7 @@
 
 // Current game state
 GameState state;
+GameState pausedState;
 
 // Player
 Player player;
@@ -143,12 +146,14 @@ static void putStringHUD(int col, int row, const char* str);
 static void putNumberHUD(int col, int row, int value, int digits);
 static int glyphIndexForChar(char c);
 static void prepareMenuLayers(void);
-static void clearMenuBackground(unsigned short entry);
-static void putStringMenu(int col, int row, const char* str);
-static void putNumberMenu(int col, int row, int value, int digits);
+static void loadMenuBackground(void);
+static void drawInfoScreen(const char* title, const char* subtitle);
+static void restorePausedGameplayLayers(void);
 
 // Menu screens
 static void drawStartScreen(void);
+static void drawLevel1IntroScreen(void);
+static void drawLevel2IntroScreen(void);
 static void drawPauseScreen(void);
 static void drawWinScreen(void);
 static void drawLoseScreen(void);
@@ -156,10 +161,11 @@ static void drawLoseScreen(void);
 // Level setup
 void resetPlayerForCurrentLevel(void);
 
-
 // Update handlers
 static void updateStart(void);
+static void updateLevel1Intro(void);
 static void updatePause(void);
+static void updateLevel2Intro(void);
 static void updateWin(void);
 static void updateLose(void);
 
@@ -174,6 +180,9 @@ static void spawnEnemyBullet(Enemy* e);
 // Physics / collisions
 u8 getCollisionPixel(int x, int y);
 int isSolidPixel(int x, int y);
+int isHazardPixel(int x, int y);
+int isGoalPixel(int x, int y);
+int rectTouchesColor(int x, int y, int width, int height, u8 color);
 int canMoveTo(int x, int y, int width, int height);
 int findGroundYBelow(int x, int y, int width, int height);
 int findLowestGroundYAtX(int x, int width, int height);
@@ -187,15 +196,10 @@ void drawBalloonSprite(int oamIndex, int screenX, int screenY);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 
-// Level One 
-int rectTouchesColor(int x, int y, int width, int height, u8 color);
-int isHazardPixel(int x, int y);
-int isGoalPixel(int x, int y);
-
-
 // Utility
 void hideUnusedSpritesFrom(int startIndex);
 int absInt(int x);
+int getFloatVelocityForLives(int lives);
 
 // ======================================================
 //                    PUBLIC GAME API
@@ -203,42 +207,36 @@ int absInt(int x);
 
 // Initializes the whole game system
 void initGame(void) {
-    // Start with score reset for a fresh run
     score = 0;
-
-    // Start on the title screen
     state = STATE_START;
-
-    // Reset frame counter
+    pausedState = STATE_LEVEL1;
     frameCount = 0;
 
-    // Door starts hidden until all enemies are defeated
     doorVisible = 0;
     doorX = 208;
     doorY = 112;
 
-    // Make sure the menu is drawn on the first frame
     menuNeedsRedraw = 1;
 
-    // Set up palettes, tiles, HUD tiles, and sprite tiles
     initGraphics();
-
-    // Draw the start screen immediately
     drawStartScreen();
 }
 
-// Main per-frame update
 void updateGame(void) {
-    // Advance global frame count
     frameCount++;
 
-    // Run logic based on current state
     switch (state) {
         case STATE_START:
             updateStart();
             break;
+        case STATE_LEVEL1_INTRO:
+            updateLevel1Intro();
+            break;
         case STATE_LEVEL1:
             updateLevel1();
+            break;
+        case STATE_LEVEL2_INTRO:
+            updateLevel2Intro();
             break;
         case STATE_LEVEL2:
             updateLevel2();
@@ -255,9 +253,7 @@ void updateGame(void) {
     }
 }
 
-// Main per-frame draw
 void drawGame(void) {
-    // Draw based on the current state
     switch (state) {
         case STATE_START:
             if (menuNeedsRedraw) {
@@ -266,8 +262,22 @@ void drawGame(void) {
             }
             break;
 
+        case STATE_LEVEL1_INTRO:
+            if (menuNeedsRedraw) {
+                drawLevel1IntroScreen();
+                menuNeedsRedraw = 0;
+            }
+            break;
+
         case STATE_LEVEL1:
             drawLevel1();
+            break;
+
+        case STATE_LEVEL2_INTRO:
+            if (menuNeedsRedraw) {
+                drawLevel2IntroScreen();
+                menuNeedsRedraw = 0;
+            }
             break;
 
         case STATE_LEVEL2:
@@ -302,32 +312,45 @@ void drawGame(void) {
 // ======================================================
 
 static void updateStart(void) {
-    // Start the game on START
+    if (BUTTON_PRESSED(BUTTON_START)) {
+        state = STATE_LEVEL1_INTRO;
+        menuNeedsRedraw = 1;
+    }
+}
+
+static void updateLevel1Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         initLevel1();
         state = STATE_LEVEL1;
     }
 }
 
-static void updatePause(void) {
-    // Unpause back to whichever level is active
+static void updateLevel2Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        if (level2BalloonsRemaining > 0 && player.x >= 0 && state == STATE_PAUSE) {
-            // Resume using the existing background state
-            state = (level2HOff > 0 || level2BalloonsRemaining < 10) ? STATE_LEVEL2 : STATE_LEVEL1;
-        }
+        initLevel2();
+        state = STATE_LEVEL2;
+    }
+}
+
+static void updatePause(void) {
+    if (BUTTON_PRESSED(BUTTON_START)) {
+        // The pause screen reuses BG memory for the menu image.
+        // So before resuming gameplay, rebuild the gameplay layers for
+        // whichever level we paused from.
+        restorePausedGameplayLayers();
+
+        // Resume the exact level we were previously in.
+        state = pausedState;
     }
 }
 
 static void updateWin(void) {
-    // Restart from the title screen
     if (BUTTON_PRESSED(BUTTON_START)) {
         initGame();
     }
 }
 
 static void updateLose(void) {
-    // Restart from the title screen
     if (BUTTON_PRESSED(BUTTON_START)) {
         initGame();
     }
@@ -338,7 +361,6 @@ static void updateLose(void) {
 // ======================================================
 
 void resetPlayerForCurrentLevel(void) {
-    // Common player fields
     player.width = PLAYER_WIDTH;
     player.height = PLAYER_HEIGHT;
     player.oldX = PLAYER_START_X;
@@ -350,14 +372,23 @@ void resetPlayerForCurrentLevel(void) {
     player.animCounter = 0;
     player.isMoving = 0;
     player.grounded = 0;
+    player.floatBoostTimer = 0;
 
-    // Start positions depend on the current state
-    if (state == STATE_LEVEL2) {
+    if (state == STATE_LEVEL2 || state == STATE_LEVEL2_INTRO) {
+        // Level 2 is an open float stage, so its spawn can stay hardcoded.
         player.x = 16;
         player.y = 70;
     } else {
+        int spawnGroundY;
+
+        // Level 1 should use the same collision-based spawn placement as respawn.
+        // This prevents the player from starting embedded inside the platform.
         player.x = PLAYER_START_X;
-        player.y = PLAYER_START_Y;
+
+        // Scan downward for the first solid ground under the spawn X and place
+        // the player just above it.
+        spawnGroundY = findGroundYBelow(player.x, 0, player.width, player.height);
+        player.y = (spawnGroundY >= 0) ? spawnGroundY : PLAYER_START_Y;
     }
 }
 
@@ -552,6 +583,10 @@ void damagePlayer(void) {
     player.xVel = 0;
     player.grounded = 0;
 
+    // Clear any leftover jump/float boost from the previous life so the respawn
+    // starts in a clean physics state.
+    player.floatBoostTimer = 0;
+
     // Respawn at the level's starting location
     if (state == STATE_LEVEL1) {
         player.x = PLAYER_START_X;
@@ -568,16 +603,14 @@ void damagePlayer(void) {
 // ======================================================
 //                    COLLISION HELPERS
 // ======================================================
-
 u8 getCollisionPixel(int x, int y) {
-    // Out of bounds is treated as solid
-    if (x < 0 || x >= collisionMapOneBitmapLen / 2 || y < 0 || y >= LEVEL1_PIXEL_H) {
+    const u8* map = (const u8*) collisionMapOneBitmap;
+
+    if (x < 0 || x >= 256 || y < 0 || y >= 256) {
         return CM_BLOCKED;
     }
 
-    // The collision map is a 240x160 8bpp bitmap exported by grit/usenti.
-    // It is indexed as a flat array of color indices.
-    return collisionMapOneBitmap[y * 240 + x];
+    return map[y * 256 + x];
 }
 
 int isSolidPixel(int x, int y) {
@@ -668,7 +701,7 @@ int getFloatVelocityForLives(int lives) {
 void clearHUD(void) {
     int i;
     for (i = 0; i < 32 * 32; i++) {
-        SCREENBLOCK[HUD_SCREENBLOCK].tilemap[i] = TILE_BLANK;
+        SCREENBLOCK[HUD_SCREENBLOCK].tilemap[i] = TILE_BLANK | TILEMAP_ENTRY_PALROW(15);
     }
 }
 
@@ -686,7 +719,8 @@ static int glyphIndexForChar(char c) {
 }
 
 static void putCharHUD(int col, int row, char c) {
-    SCREENBLOCK[HUD_SCREENBLOCK].tilemap[row * 32 + col] = glyphIndexForChar(c);
+    SCREENBLOCK[HUD_SCREENBLOCK].tilemap[row * 32 + col] =
+        glyphIndexForChar(c) | TILEMAP_ENTRY_PALROW(15);
 }
 
 static void putStringHUD(int col, int row, const char* str) {
@@ -733,8 +767,21 @@ void drawHUD(void) {
 static void prepareMenuLayers(void) {
     initMode0();
 
-    setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
-    setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
+    // BG0 = HUD/text layer
+    setupBackground(0,
+        BG_PRIORITY(0) |
+        BG_CHARBLOCK(HUD_CHARBLOCK) |
+        BG_SCREENBLOCK(HUD_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_SMALL);
+
+    // BG1 = menu/state background image layer
+    setupBackground(1,
+        BG_PRIORITY(1) |
+        BG_CHARBLOCK(LEVEL_CHARBLOCK) |
+        BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_SMALL);
 
     setBackgroundOffset(0, 0, 0);
     setBackgroundOffset(1, 0, 0);
@@ -744,60 +791,146 @@ static void prepareMenuLayers(void) {
     hideSprites();
 }
 
-static void clearMenuBackground(unsigned short entry) {
-    int i;
-    for (i = 0; i < 32 * 32; i++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[i] = entry;
+static void loadMenuBackground(void) {
+    int row;
+    int col;
+    int tileId = 0;
+
+    // Load the 4bpp background palette for the menu/state screen art.
+    loadBgPalette(screenPal, screenPalLen / 2);
+
+    // Keep HUD font colors in palette row 15 so the text overlays still draw
+    // correctly on top of the menu background.
+    BG_PALETTE[240] = BLACK;
+    BG_PALETTE[241] = WHITE;
+
+    // The menu background uses 600 4bpp tiles, which spills past one charblock.
+    // Clear both charblocks that the art can touch so there is no stale tile data.
+    clearCharBlock(LEVEL_CHARBLOCK);
+    clearCharBlock(LEVEL_CHARBLOCK + 1);
+
+    // Copy the full 4bpp tile data into BG tile memory starting at charblock 1.
+    DMANow(3,
+        (volatile void*) screenTiles,
+        (volatile void*) &CHARBLOCK[LEVEL_CHARBLOCK].tileimg[0],
+        screenTilesLen / 2);
+
+    clearScreenblock(LEVEL_SCREENBLOCK);
+
+    // Build the 30x20 tilemap for the full-screen image.
+    // Since the art was exported as sequential tiles, tile IDs go in order.
+    for (row = 0; row < 20; row++) {
+        for (col = 0; col < 30; col++) {
+            SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[row * 32 + col] =
+                TILEMAP_ENTRY_TILEID(tileId++);
+        }
     }
 }
 
-static void putStringMenu(int col, int row, const char* str) {
-    putStringHUD(col, row, str);
+static void drawInfoScreen(const char* title, const char* subtitle) {
+    prepareMenuLayers();
+    loadMenuBackground();
+
+    putStringHUD(2, 8, title);
+    putStringHUD(2, 14, subtitle);
 }
 
-static void putNumberMenu(int col, int row, int value, int digits) {
-    putNumberHUD(col, row, value, digits);
+static void restorePausedGameplayLayers(void) {
+    initMode0();
+
+    if (pausedState == STATE_LEVEL1) {
+        // Recreate the same BG setup used by level 1.
+        setupBackground(0,
+            BG_PRIORITY(0) |
+            BG_CHARBLOCK(HUD_CHARBLOCK) |
+            BG_SCREENBLOCK(HUD_SCREENBLOCK) |
+            BG_4BPP |
+            BG_SIZE_SMALL);
+
+        setupBackground(1,
+            BG_PRIORITY(1) |
+            BG_CHARBLOCK(LEVEL_CHARBLOCK) |
+            BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
+            BG_4BPP |
+            BG_SIZE_SMALL);
+
+        // Reload gameplay palette/tiles because pause used the screen image.
+        loadBgPalette(tilesetPal, tilesetPalLen / 2);
+
+        // Keep HUD text colors in palette row 15.
+        BG_PALETTE[240] = BLACK;
+        BG_PALETTE[241] = WHITE;
+
+        loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
+
+        // Rebuild the actual level 1 tilemap art into the gameplay screenblock.
+        buildLevel1MapAndCollision();
+
+        // Restore the camera offsets from before pausing.
+        setBackgroundOffset(0, 0, 0);
+        setBackgroundOffset(1, level1HOff, level1VOff);
+
+        // Clear old pause text from the HUD map.
+        clearHUD();
+    } else if (pausedState == STATE_LEVEL2) {
+        // Recreate the same BG setup used by level 2.
+        setupBackground(0,
+            BG_PRIORITY(0) |
+            BG_CHARBLOCK(HUD_CHARBLOCK) |
+            BG_SCREENBLOCK(HUD_SCREENBLOCK) |
+            BG_4BPP |
+            BG_SIZE_SMALL);
+
+        setupBackground(1,
+            BG_PRIORITY(1) |
+            BG_CHARBLOCK(LEVEL_CHARBLOCK) |
+            BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
+            BG_4BPP |
+            BG_SIZE_WIDE);
+
+        // Reload gameplay palette/tiles because pause used the screen image.
+        loadBgPalette(tilesetPal, tilesetPalLen / 2);
+
+        // Keep HUD text colors in palette row 15.
+        BG_PALETTE[240] = BLACK;
+        BG_PALETTE[241] = WHITE;
+
+        loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
+
+        // Rebuild the level 2 map into the gameplay screenblocks.
+        buildLevel2Map();
+
+        // Restore the camera position from before pausing.
+        setBackgroundOffset(0, 0, 0);
+        setBackgroundOffset(1, level2HOff, 0);
+
+        // Clear old pause text from the HUD map.
+        clearHUD();
+    }
 }
 
 static void drawStartScreen(void) {
-    prepareMenuLayers();
+    drawInfoScreen("BALLOON FIGHT", "PRESS START TO PLAY");
+}
 
-    clearMenuBackground(0);
+static void drawLevel1IntroScreen(void) {
+    drawInfoScreen("BALLOON FIGHT", "LEVEL ONE PRESS START");
+}
 
-    putStringMenu(8, 3, "BALLOON GAME");
-    putStringMenu(8, 10, "PRESS START");
-    putStringMenu(6, 14, "B TO SHOOT");
-    putStringMenu(6, 16, "A TO FLOAT");
+static void drawLevel2IntroScreen(void) {
+    drawInfoScreen("BALLOON FIGHT", "LEVEL TWO PRESS START");
 }
 
 static void drawPauseScreen(void) {
-    prepareMenuLayers();
-
-    clearMenuBackground(0);
-
-    putStringMenu(11, 7, "PAUSED");
-    putStringMenu(3, 11, "PRESS START TO RESUME");
+    drawInfoScreen("BALLOON FIGHT", "PAUSED PRESS START");
 }
 
 static void drawWinScreen(void) {
-    prepareMenuLayers();
-
-    clearMenuBackground(0);
-
-    putStringMenu(10, 6, "YOU WIN!");
-    putStringMenu(6, 9, "FINAL SCORE");
-    putNumberMenu(14, 11, score, 4);
-    putStringMenu(3, 15, "PRESS START TO RESTART");
+    drawInfoScreen("BALLOON FIGHT", "YOU WON PRESS START");
 }
 
 static void drawLoseScreen(void) {
-    prepareMenuLayers();
-
-    clearMenuBackground(0);
-
-    putStringMenu(9, 6, "YOU LOSE");
-    putStringMenu(8, 10, "TRY AGAIN");
-    putStringMenu(3, 15, "PRESS START TO RESTART");
+    drawInfoScreen("BALLOON FIGHT", "OH NO YOU LOST");
 }
 
 // ======================================================
@@ -867,20 +1000,15 @@ void hideUnusedSpritesFrom(int startIndex) {
 // ======================================================
 
 static void initGraphics(void) {
-    // Keep the whole game in Mode 0.
     initMode0();
 
-    // Load the artist-made tileset and palette used by the level tilemaps.
-    loadBgPalette(tilesetPal, tilesetPalLen / 2);
-    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
-
-    // Build HUD font tiles in their own charblock.
     buildHudTiles();
-
-    // Build OBJ tiles for player, enemies, bullets, balloons, stars, and door.
     buildSpriteTiles();
 
-    // Hide every sprite initially.
+    // Default font colors in palette row 15
+    BG_PALETTE[240] = BLACK;
+    BG_PALETTE[241] = WHITE;
+
     hideSprites();
 }
 
@@ -923,67 +1051,64 @@ static void initPalettes(void) {
 }
 
 static void buildHudTiles(void) {
-    // Clear HUD charblock
+    static const u8 glyphA[8] = {0x18,0x24,0x24,0x3C,0x24,0x24,0x24,0x00};
+    static const u8 glyphB[8] = {0x38,0x24,0x24,0x38,0x24,0x24,0x38,0x00};
+    static const u8 glyphC[8] = {0x18,0x24,0x20,0x20,0x20,0x24,0x18,0x00};
+    static const u8 glyphD[8] = {0x38,0x24,0x24,0x24,0x24,0x24,0x38,0x00};
+    static const u8 glyphE[8] = {0x3C,0x20,0x20,0x38,0x20,0x20,0x3C,0x00};
+    static const u8 glyphF[8] = {0x3C,0x20,0x20,0x38,0x20,0x20,0x20,0x00};
+    static const u8 glyphG[8] = {0x18,0x24,0x20,0x2C,0x24,0x24,0x18,0x00};
+    static const u8 glyphH[8] = {0x24,0x24,0x24,0x3C,0x24,0x24,0x24,0x00};
+    static const u8 glyphI[8] = {0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00};
+    static const u8 glyphJ[8] = {0x1C,0x08,0x08,0x08,0x08,0x28,0x10,0x00};
+    static const u8 glyphK[8] = {0x24,0x28,0x30,0x20,0x30,0x28,0x24,0x00};
+    static const u8 glyphL[8] = {0x20,0x20,0x20,0x20,0x20,0x20,0x3C,0x00};
+    static const u8 glyphM[8] = {0x22,0x36,0x2A,0x2A,0x22,0x22,0x22,0x00};
+    static const u8 glyphN[8] = {0x24,0x34,0x34,0x2C,0x2C,0x24,0x24,0x00};
+    static const u8 glyphO[8] = {0x18,0x24,0x24,0x24,0x24,0x24,0x18,0x00};
+    static const u8 glyphP[8] = {0x38,0x24,0x24,0x38,0x20,0x20,0x20,0x00};
+    static const u8 glyphQ[8] = {0x18,0x24,0x24,0x24,0x2C,0x28,0x14,0x00};
+    static const u8 glyphR[8] = {0x38,0x24,0x24,0x38,0x30,0x28,0x24,0x00};
+    static const u8 glyphS[8] = {0x1C,0x20,0x20,0x18,0x04,0x04,0x38,0x00};
+    static const u8 glyphT[8] = {0x3C,0x18,0x18,0x18,0x18,0x18,0x18,0x00};
+    static const u8 glyphU[8] = {0x24,0x24,0x24,0x24,0x24,0x24,0x18,0x00};
+    static const u8 glyphV[8] = {0x24,0x24,0x24,0x24,0x24,0x18,0x18,0x00};
+    static const u8 glyphW[8] = {0x22,0x22,0x22,0x2A,0x2A,0x36,0x22,0x00};
+    static const u8 glyphX[8] = {0x24,0x24,0x18,0x18,0x18,0x24,0x24,0x00};
+    static const u8 glyphY[8] = {0x24,0x24,0x24,0x18,0x18,0x18,0x18,0x00};
+    static const u8 glyphZ[8] = {0x3C,0x04,0x08,0x18,0x10,0x20,0x3C,0x00};
+
+    static const u8 glyph0[8] = {0x18,0x24,0x2C,0x34,0x24,0x24,0x18,0x00};
+    static const u8 glyph1[8] = {0x08,0x18,0x08,0x08,0x08,0x08,0x1C,0x00};
+    static const u8 glyph2[8] = {0x18,0x24,0x04,0x08,0x10,0x20,0x3C,0x00};
+    static const u8 glyph3[8] = {0x38,0x04,0x04,0x18,0x04,0x04,0x38,0x00};
+    static const u8 glyph4[8] = {0x08,0x18,0x28,0x28,0x3C,0x08,0x08,0x00};
+    static const u8 glyph5[8] = {0x3C,0x20,0x20,0x38,0x04,0x04,0x38,0x00};
+    static const u8 glyph6[8] = {0x18,0x20,0x20,0x38,0x24,0x24,0x18,0x00};
+    static const u8 glyph7[8] = {0x3C,0x04,0x08,0x10,0x10,0x10,0x10,0x00};
+    static const u8 glyph8[8] = {0x18,0x24,0x24,0x18,0x24,0x24,0x18,0x00};
+    static const u8 glyph9[8] = {0x18,0x24,0x24,0x1C,0x04,0x04,0x18,0x00};
+
+    static const u8 glyphColon[8] = {0x00,0x18,0x18,0x00,0x18,0x18,0x00,0x00};
+    static const u8 glyphDash[8]  = {0x00,0x00,0x00,0x3C,0x00,0x00,0x00,0x00};
+    static const u8 glyphBang[8]  = {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00};
+
+    const u8* glyphs[39] = {
+        glyphA,glyphB,glyphC,glyphD,glyphE,glyphF,glyphG,glyphH,glyphI,glyphJ,glyphK,glyphL,glyphM,
+        glyphN,glyphO,glyphP,glyphQ,glyphR,glyphS,glyphT,glyphU,glyphV,glyphW,glyphX,glyphY,glyphZ,
+        glyph0,glyph1,glyph2,glyph3,glyph4,glyph5,glyph6,glyph7,glyph8,glyph9,
+        glyphColon,glyphDash,glyphBang
+    };
+
+    int i;
+    u32* base = (u32*) 0x06000000;
+
     clearCharBlock(HUD_CHARBLOCK);
 
-    // Blank tile for empty HUD cells
-    makeSolidTile(BG_TILE_MEM + (HUD_CHARBLOCK * 1024), TILE_BLANK, 0);
+    makeSolidTile(base + (HUD_CHARBLOCK * 1024), TILE_BLANK, 0);
 
-    // Glyph patterns for A-Z, 0-9, and a few punctuation marks
-    {
-        static const u8 glyphA[8] = {0x18,0x24,0x24,0x3C,0x24,0x24,0x24,0x00};
-        static const u8 glyphB[8] = {0x38,0x24,0x24,0x38,0x24,0x24,0x38,0x00};
-        static const u8 glyphC[8] = {0x18,0x24,0x20,0x20,0x20,0x24,0x18,0x00};
-        static const u8 glyphD[8] = {0x38,0x24,0x24,0x24,0x24,0x24,0x38,0x00};
-        static const u8 glyphE[8] = {0x3C,0x20,0x20,0x38,0x20,0x20,0x3C,0x00};
-        static const u8 glyphF[8] = {0x3C,0x20,0x20,0x38,0x20,0x20,0x20,0x00};
-        static const u8 glyphG[8] = {0x18,0x24,0x20,0x2C,0x24,0x24,0x18,0x00};
-        static const u8 glyphH[8] = {0x24,0x24,0x24,0x3C,0x24,0x24,0x24,0x00};
-        static const u8 glyphI[8] = {0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00};
-        static const u8 glyphJ[8] = {0x1C,0x08,0x08,0x08,0x08,0x28,0x10,0x00};
-        static const u8 glyphK[8] = {0x24,0x28,0x30,0x20,0x30,0x28,0x24,0x00};
-        static const u8 glyphL[8] = {0x20,0x20,0x20,0x20,0x20,0x20,0x3C,0x00};
-        static const u8 glyphM[8] = {0x22,0x36,0x2A,0x2A,0x22,0x22,0x22,0x00};
-        static const u8 glyphN[8] = {0x24,0x34,0x34,0x2C,0x2C,0x24,0x24,0x00};
-        static const u8 glyphO[8] = {0x18,0x24,0x24,0x24,0x24,0x24,0x18,0x00};
-        static const u8 glyphP[8] = {0x38,0x24,0x24,0x38,0x20,0x20,0x20,0x00};
-        static const u8 glyphQ[8] = {0x18,0x24,0x24,0x24,0x2C,0x28,0x14,0x00};
-        static const u8 glyphR[8] = {0x38,0x24,0x24,0x38,0x30,0x28,0x24,0x00};
-        static const u8 glyphS[8] = {0x1C,0x20,0x20,0x18,0x04,0x04,0x38,0x00};
-        static const u8 glyphT[8] = {0x3C,0x18,0x18,0x18,0x18,0x18,0x18,0x00};
-        static const u8 glyphU[8] = {0x24,0x24,0x24,0x24,0x24,0x24,0x18,0x00};
-        static const u8 glyphV[8] = {0x24,0x24,0x24,0x24,0x24,0x18,0x18,0x00};
-        static const u8 glyphW[8] = {0x22,0x22,0x22,0x2A,0x2A,0x36,0x22,0x00};
-        static const u8 glyphX[8] = {0x24,0x24,0x18,0x18,0x18,0x24,0x24,0x00};
-        static const u8 glyphY[8] = {0x24,0x24,0x24,0x18,0x18,0x18,0x18,0x00};
-        static const u8 glyphZ[8] = {0x3C,0x04,0x08,0x18,0x10,0x20,0x3C,0x00};
-
-        static const u8 glyph0[8] = {0x18,0x24,0x2C,0x34,0x24,0x24,0x18,0x00};
-        static const u8 glyph1[8] = {0x08,0x18,0x08,0x08,0x08,0x08,0x1C,0x00};
-        static const u8 glyph2[8] = {0x18,0x24,0x04,0x08,0x10,0x20,0x3C,0x00};
-        static const u8 glyph3[8] = {0x38,0x04,0x04,0x18,0x04,0x04,0x38,0x00};
-        static const u8 glyph4[8] = {0x08,0x18,0x28,0x28,0x3C,0x08,0x08,0x00};
-        static const u8 glyph5[8] = {0x3C,0x20,0x20,0x38,0x04,0x04,0x38,0x00};
-        static const u8 glyph6[8] = {0x18,0x20,0x20,0x38,0x24,0x24,0x18,0x00};
-        static const u8 glyph7[8] = {0x3C,0x04,0x08,0x10,0x10,0x10,0x10,0x00};
-        static const u8 glyph8[8] = {0x18,0x24,0x24,0x18,0x24,0x24,0x18,0x00};
-        static const u8 glyph9[8] = {0x18,0x24,0x24,0x1C,0x04,0x04,0x18,0x00};
-
-        static const u8 glyphColon[8] = {0x00,0x18,0x18,0x00,0x18,0x18,0x00,0x00};
-        static const u8 glyphDash[8]  = {0x00,0x00,0x00,0x3C,0x00,0x00,0x00,0x00};
-        static const u8 glyphBang[8]  = {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00};
-
-        const u8* glyphs[39] = {
-            glyphA,glyphB,glyphC,glyphD,glyphE,glyphF,glyphG,glyphH,glyphI,glyphJ,glyphK,glyphL,glyphM,
-            glyphN,glyphO,glyphP,glyphQ,glyphR,glyphS,glyphT,glyphU,glyphV,glyphW,glyphX,glyphY,glyphZ,
-            glyph0,glyph1,glyph2,glyph3,glyph4,glyph5,glyph6,glyph7,glyph8,glyph9,
-            glyphColon,glyphDash,glyphBang
-        };
-
-        int i;
-        for (i = 0; i < 39; i++) {
-            makeGlyphTile(BG_TILE_MEM + (HUD_CHARBLOCK * 1024), FONT_BASE_TILE + i, glyphs[i], 1, 0);
-        }
+    for (i = 0; i < 39; i++) {
+        makeGlyphTile(base + (HUD_CHARBLOCK * 1024), FONT_BASE_TILE + i, glyphs[i], 1, 0);
     }
 }
 

@@ -9,34 +9,34 @@
 void initLevel1(void) {
     int i;
 
-    // Reinitialize Mode 0 layers
     initMode0();
 
-    // BG0 is HUD, BG1 is gameplay layer
+    // BG0 = HUD
     setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
+
+    // BG1 = gameplay map
     setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
 
-    // Reset scrolling
+    // Load gameplay palette and tiles back into BG memory
+    loadBgPalette(tilesetPal, tilesetPalLen / 2);
+    BG_PALETTE[240] = BLACK;
+    BG_PALETTE[241] = WHITE;
+    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
+
     level1HOff = 0;
     level1VOff = 0;
     setBackgroundOffset(0, 0, 0);
     setBackgroundOffset(1, level1HOff, level1VOff);
 
-    // Build tilemap and collision map for level 1
     buildLevel1MapAndCollision();
 
-    // Reset player lives for a fresh level start
     player.lives = 3;
     player.invincibleTimer = 0;
-
-    // Place the player for the current level
     resetPlayerForCurrentLevel();
 
-    // Reset level state
     enemiesRemaining = MAX_ENEMIES;
     doorVisible = 0;
 
-    // Reset bullets
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         playerBullets[i].active = 0;
         playerBullets[i].width = 8;
@@ -49,7 +49,6 @@ void initLevel1(void) {
         enemyBullets[i].height = 8;
     }
 
-    // Initialize enemies
     for (i = 0; i < MAX_ENEMIES; i++) {
         enemies[i].width = 16;
         enemies[i].height = 16;
@@ -60,7 +59,6 @@ void initLevel1(void) {
         enemies[i].phase = ENEMY_FLOATING;
     }
 
-    // Floating enemies in the sky
     enemies[0].x = 72;
     enemies[0].y = 52;
     enemies[0].xVel = 1;
@@ -75,7 +73,6 @@ void initLevel1(void) {
     enemies[1].maxX = 200;
     enemies[1].direction = DIR_LEFT;
 
-    // Walking enemies on ground / platforms
     enemies[2].x = 112;
     enemies[2].y = 176;
     enemies[2].xVel = 1;
@@ -92,14 +89,12 @@ void initLevel1(void) {
     enemies[3].direction = DIR_LEFT;
     enemies[3].phase = ENEMY_WALKING;
 
-    // Initialize balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         balloons[i].active = 0;
         balloons[i].width = 8;
         balloons[i].height = 16;
     }
 
-    // Place balloons around the level
     balloons[0].x = 36;  balloons[0].y = 144; balloons[0].active = 1;
     balloons[1].x = 88;  balloons[1].y = 152; balloons[1].active = 1;
     balloons[2].x = 126; balloons[2].y = 88;  balloons[2].active = 1;
@@ -134,19 +129,17 @@ void buildLevel1MapAndCollision(void) {
 }
 
 void updateLevel1(void) {
-    // Pause on START
     if (BUTTON_PRESSED(BUTTON_START)) {
+        pausedState = STATE_LEVEL1;
         state = STATE_PAUSE;
         menuNeedsRedraw = 1;
         return;
     }
 
-    // Update invincibility timer
     if (player.invincibleTimer > 0) {
         player.invincibleTimer--;
     }
 
-    // Update level 1 entities
     updatePlayerLevel1();
     updatePlayerBullets();
     updateEnemyBullets();
@@ -154,24 +147,20 @@ void updateLevel1(void) {
     updateBalloonsLevel1();
     updatePlayerAnimation();
 
-    // Camera follows the player, clamped to the map
     level1HOff = CLAMP(player.x - (SCREENWIDTH / 2) + (player.width / 2), 0, LEVEL1_PIXEL_W - SCREENWIDTH);
     level1VOff = CLAMP(player.y - (SCREENHEIGHT / 2), 0, LEVEL1_PIXEL_H - SCREENHEIGHT);
     setBackgroundOffset(1, level1HOff, level1VOff);
 
-    // If all enemies are dead, reveal the door
     if (enemiesRemaining <= 0) {
         doorVisible = 1;
     }
 
-    // Enter the door to move to level 2
     if (doorVisible && collision(player.x, player.y, player.width, player.height, doorX, doorY, 16, 16)) {
-        initLevel2();
-        state = STATE_LEVEL2;
+        state = STATE_LEVEL2_INTRO;
+        menuNeedsRedraw = 1;
         return;
     }
 
-    // Lose if out of lives
     if (player.lives <= 0) {
         state = STATE_LOSE;
         menuNeedsRedraw = 1;
@@ -239,16 +228,34 @@ void updatePlayerLevel1(void) {
         player.grounded = 0;
     }
 
-    // Press A to float/jump upward.
-    // Each press gives an upward impulse based on remaining balloons/lives.
-    // This works both from the ground and in the air.
+        // Press A to float/jump upward.
+    //
+    // Each press gives an upward impulse based on remaining lives.
+    // More lives = stronger float height.
+    //
+    // This still works both on the ground and in the air, so the player can
+    // float upward repeatedly as long as they still have lives remaining.
     if (BUTTON_PRESSED(BUTTON_A) && player.lives > 0) {
         player.yVel = getFloatVelocityForLives(player.lives);
+
+        // Give the jump/float a short multi-frame boost window so the motion
+        // feels more curved and natural instead of looking like a single-frame
+        // pop upward.
+        player.floatBoostTimer = player.lives + 1;
+
         player.grounded = 0;
         player.isMoving = 1;
     }
 
-    // Apply gravity whenever the player is airborne
+    // Apply a tiny extra upward push for a few frames right after each A press.
+    // This helps the float feel smoother while keeping the existing downward
+    // fall behavior intact.
+    if (!player.grounded && player.floatBoostTimer > 0 && player.yVel < 0) {
+        player.yVel--;
+        player.floatBoostTimer--;
+    }
+
+    // Apply gravity whenever the player is airborne.
     if (!player.grounded) {
         player.yVel += PLAYER_GRAVITY;
 
@@ -257,9 +264,14 @@ void updatePlayerLevel1(void) {
         }
     }
 
-    // If the player is grounded, do not keep downward velocity
+    // If grounded, do not keep any downward falling speed.
     if (player.grounded && player.yVel > 0) {
         player.yVel = 0;
+    }
+
+    // If grounded, also clear any leftover upward boost.
+    if (player.grounded) {
+        player.floatBoostTimer = 0;
     }
 
     // Apply vertical velocity one pixel at a time for smoother collision handling
