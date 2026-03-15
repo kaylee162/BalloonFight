@@ -147,45 +147,41 @@ void updatePlayerLevel2(void) {
         player.grounded = 0;
     }
 
-        // Press A to float upward based on remaining lives/balloons.
-    // This works both from the ground and in the air.
-    if (BUTTON_PRESSED(BUTTON_A) && player.lives > 0) {
-        player.yVel = getFloatVelocityForLives(player.lives);
-
-        // Same short boost window used in level 1 so the float has a smoother,
-        // more noticeable arc and the difference by lives is easier to feel.
-        player.floatBoostTimer = player.lives + 1;
+    // A held = fly upward.
+    //
+    // Same behavior as level 1:
+    // more lives means faster upward flight.
+    if (BUTTON_HELD(BUTTON_UP) && player.lives > 0) {
+        int targetUpVel = getFloatVelocityForLives(player.lives);
 
         player.grounded = 0;
         player.isMoving = 1;
-    }
 
-    // Small multi-frame upward assist immediately after pressing A.
-    // This improves the shape of the jump/float arc without changing the
-    // downward fall behavior that already feels good.
-    if (!player.grounded && player.floatBoostTimer > 0 && player.yVel < 0) {
-        player.yVel--;
-        player.floatBoostTimer--;
-    }
+        if (player.yVel > targetUpVel) {
+            player.yVel--;
+        }
 
-    // Gravity always pulls the player downward when airborne.
-    if (!player.grounded) {
-        player.yVel += PLAYER_GRAVITY;
+        if (player.yVel < targetUpVel) {
+            player.yVel = targetUpVel;
+        }
+    } else {
+        // Normal falling behavior when A is not held.
+        if (!player.grounded) {
+            player.yVel += PLAYER_GRAVITY;
 
-        if (player.yVel > PLAYER_MAX_FALL_SPEED) {
-            player.yVel = PLAYER_MAX_FALL_SPEED;
+            if (player.yVel > PLAYER_MAX_FALL_SPEED) {
+                player.yVel = PLAYER_MAX_FALL_SPEED;
+            }
         }
     }
 
-    // If grounded, do not keep downward velocity.
+    // If grounded, do not keep downward falling speed.
     if (player.grounded && player.yVel > 0) {
         player.yVel = 0;
     }
 
-    // If grounded, clear any leftover upward boost.
-    if (player.grounded) {
-        player.floatBoostTimer = 0;
-    }
+    // No boost timer needed with hold-to-fly behavior.
+    player.floatBoostTimer = 0;
 
     // Apply vertical movement one pixel at a time
     while (player.yVel < 0) {

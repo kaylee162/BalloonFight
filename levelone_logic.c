@@ -228,14 +228,14 @@ void updatePlayerLevel1(void) {
         player.grounded = 0;
     }
 
-        // Press A to float/jump upward.
+    // Press A to float/jump upward.
     //
     // Each press gives an upward impulse based on remaining lives.
     // More lives = stronger float height.
     //
     // This still works both on the ground and in the air, so the player can
     // float upward repeatedly as long as they still have lives remaining.
-    if (BUTTON_PRESSED(BUTTON_A) && player.lives > 0) {
+    if (BUTTON_PRESSED(BUTTON_UP) && player.lives > 0) {
         player.yVel = getFloatVelocityForLives(player.lives);
 
         // Give the jump/float a short multi-frame boost window so the motion
@@ -247,32 +247,55 @@ void updatePlayerLevel1(void) {
         player.isMoving = 1;
     }
 
-    // Apply a tiny extra upward push for a few frames right after each A press.
-    // This helps the float feel smoother while keeping the existing downward
-    // fall behavior intact.
-    if (!player.grounded && player.floatBoostTimer > 0 && player.yVel < 0) {
-        player.yVel--;
-        player.floatBoostTimer--;
-    }
+    // A held = fly upward.
+    //
+    // This is more reliable than a one-frame BUTTON_PRESSED impulse and matches
+    // the intended "float/fly upward" behavior much better.
+    //
+    // More lives = stronger upward speed:
+    // 3 lives -> fastest upward
+    // 2 lives -> medium upward
+    // 1 life  -> weakest upward
+    //
+    // This works both from the ground and in the air.
+    if (BUTTON_HELD(BUTTON_UP) && player.lives > 0) {
+        int targetUpVel = getFloatVelocityForLives(player.lives);
 
-    // Apply gravity whenever the player is airborne.
-    if (!player.grounded) {
-        player.yVel += PLAYER_GRAVITY;
+        // Start flying if grounded.
+        player.grounded = 0;
+        player.isMoving = 1;
 
-        if (player.yVel > PLAYER_MAX_FALL_SPEED) {
-            player.yVel = PLAYER_MAX_FALL_SPEED;
+        // While A is held, keep pulling velocity upward toward the target.
+        // This makes the movement feel smooth and controllable instead of
+        // acting like a tiny single-frame hop.
+        if (player.yVel > targetUpVel) {
+            player.yVel--;
+        }
+
+        // Clamp so we do not fly upward faster than intended for this
+        // number of lives.
+        if (player.yVel < targetUpVel) {
+            player.yVel = targetUpVel;
+        }
+    } else {
+        // When A is not being held, gravity takes over normally.
+        if (!player.grounded) {
+            player.yVel += PLAYER_GRAVITY;
+
+            if (player.yVel > PLAYER_MAX_FALL_SPEED) {
+                player.yVel = PLAYER_MAX_FALL_SPEED;
+            }
         }
     }
 
-    // If grounded, do not keep any downward falling speed.
+    // If grounded, do not keep downward falling speed.
     if (player.grounded && player.yVel > 0) {
         player.yVel = 0;
     }
 
-    // If grounded, also clear any leftover upward boost.
-    if (player.grounded) {
-        player.floatBoostTimer = 0;
-    }
+    // This older boost timer behavior is no longer needed because flying is
+    // now driven directly by holding A.
+    player.floatBoostTimer = 0;
 
     // Apply vertical velocity one pixel at a time for smoother collision handling
     while (player.yVel < 0) {
