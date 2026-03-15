@@ -52,10 +52,10 @@
 
 #define FONT_BASE_TILE 32
 
-#define OBJ_TILE_BULLET          24
-#define OBJ_TILE_EBULLET         25
-#define OBJ_TILE_BALLOON         26
-#define OBJ_TILE_STAR            28
+#define OBJ_TILE_STAR            304
+#define OBJ_TILE_BULLET          305
+#define OBJ_TILE_EBULLET         306
+#define OBJ_TILE_BALLOON         320
 #define OBJ_TILE_DOOR_CLOSED     400
 #define OBJ_TILE_DOOR_OPEN_TOP   416
 #define OBJ_TILE_DOOR_OPEN_BOT   432
@@ -175,6 +175,7 @@ extern int enemiesRemaining;
 extern int level1HOff;
 extern int level1VOff;
 extern int level2HOff;
+extern int level2VOff;
 extern int menuNeedsRedraw;
 extern int doorVisible;
 extern int doorOpen;
