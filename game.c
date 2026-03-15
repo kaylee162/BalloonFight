@@ -10,8 +10,10 @@
 #include "levelone.h"
 #include "leveltwo.h"
 #include "collisionMapOne.h"
+#include "spriteSheet.h"
 
 #include "screen.h"
+
 
 // ======================================================
 //                       VRAM HELPERS
@@ -61,18 +63,18 @@
 // Font tile base for BG0
 #define FONT_BASE_TILE 32
 
-// Simple OBJ tile indices
-#define OBJ_TILE_PLAYER0    0
-#define OBJ_TILE_PLAYER1    4
-#define OBJ_TILE_ENEMYF0    8
-#define OBJ_TILE_ENEMYF1    12
-#define OBJ_TILE_ENEMYW0    16
-#define OBJ_TILE_ENEMYW1    20
-#define OBJ_TILE_BULLET     24
-#define OBJ_TILE_EBULLET    25
-#define OBJ_TILE_BALLOON    26
-#define OBJ_TILE_STAR       28
-#define OBJ_TILE_DOOR       32
+// ======================================================
+// OBJ tile layout in 1D sprite memory
+// 32x32 sprite = 16 tiles
+// 8x8 sprite   = 1 tile
+// ======================================================
+#define OBJ_TILE_PLAYER_RIGHT   0
+#define OBJ_TILE_PLAYER_LEFT    64
+#define OBJ_TILE_PLAYER_UP      128
+#define OBJ_TILE_PLAYER_DOWN    192
+
+#define OBJ_TILE_ENEMY          256
+#define OBJ_TILE_BALLOON        304
 
 // Player directions
 #define DIR_LEFT  0
@@ -114,11 +116,15 @@ int menuNeedsRedraw;
 
 // Door state for finishing level 1
 int doorVisible;
+int doorOpen;
 int doorX;
 int doorY;
 
 // Frame counter
 int frameCount;
+
+// Small pseudo-random state used for balloon color selection
+static unsigned int spriteRngState = 0xA341316Cu;
 
 // ======================================================
 //                   FORWARD DECLARATIONS
@@ -190,9 +196,9 @@ void damagePlayer(void);
 
 // Sprite drawing
 void drawPlayerSprite(int screenX, int screenY);
-void drawEnemySprite(int i, int screenX, int screenY);
+void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 
@@ -200,6 +206,7 @@ void drawDoorSprite(int screenX, int screenY);
 void hideUnusedSpritesFrom(int startIndex);
 int absInt(int x);
 int getFloatVelocityForLives(int lives);
+int nextRandomSpriteVariant(void);
 
 // ======================================================
 //                    PUBLIC GAME API
@@ -213,6 +220,7 @@ void initGame(void) {
     frameCount = 0;
 
     doorVisible = 0;
+    doorOpen = 0;
     doorX = 208;
     doorY = 112;
 
@@ -393,18 +401,16 @@ void resetPlayerForCurrentLevel(void) {
 }
 
 void updatePlayerAnimation(void) {
-    // Idle if not moving
     if (!player.isMoving) {
         player.currentFrame = 0;
         player.animCounter = 0;
         return;
     }
 
-    // Toggle between two simple frames
     player.animCounter++;
-    if (player.animCounter > 12) {
+    if (player.animCounter >= 8) {
         player.animCounter = 0;
-        player.currentFrame ^= 1;
+        player.currentFrame = (player.currentFrame + 1) % 4;
     }
 }
 
@@ -449,17 +455,47 @@ void updatePlayerBullets(void) {
             continue;
         }
 
-        // Check against enemies in level 1
+        // Check bullet collision with enemies
         for (j = 0; j < MAX_ENEMIES; j++) {
-            if (enemies[j].active &&
-                collision(playerBullets[i].x, playerBullets[i].y, playerBullets[i].width, playerBullets[i].height,
-                          enemies[j].x, enemies[j].y, enemies[j].width, enemies[j].height)) {
+            if (!enemies[j].active) continue;
+
+            if (collision(playerBullets[i].x, playerBullets[i].y,
+                        playerBullets[i].width, playerBullets[i].height,
+                        enemies[j].x, enemies[j].y,
+                        enemies[j].width, enemies[j].height)) {
 
                 playerBullets[i].active = 0;
-                enemies[j].active = 0;
-                enemies[j].phase = ENEMY_DEAD;
-                enemiesRemaining--;
-                score += SCORE_ENEMY_KILL;
+
+                // -------------------------------
+                // PHASE 1 -> PHASE 2 TRANSITION
+                // -------------------------------
+                if (enemies[j].phase == ENEMY_FLOATING) {
+
+                    // Per spec: if no ground below, enemy dies immediately
+                    if (findGroundYBelow(enemies[j].x, enemies[j].y,
+                                        enemies[j].width, enemies[j].height) < 0) {
+                        enemies[j].active = 0;
+                        enemies[j].phase = ENEMY_DEAD;
+                        enemiesRemaining--;
+                        score += SCORE_ENEMY_KILL;
+                    } else {
+                        enemies[j].phase = ENEMY_WALKING;
+                        enemies[j].yVel = 2;
+                    }
+
+                }
+                // -------------------------------
+                // PHASE 2 -> DEAD
+                // -------------------------------
+                else if (enemies[j].phase == ENEMY_WALKING) {
+
+                    enemies[j].active = 0;
+                    enemies[j].phase = ENEMY_DEAD;
+
+                    enemiesRemaining--;
+                    score += SCORE_ENEMY_KILL;
+                }
+
                 break;
             }
         }
@@ -520,44 +556,110 @@ void updateEnemies(void) {
     int i;
 
     for (i = 0; i < MAX_ENEMIES; i++) {
-        if (!enemies[i].active) {
-            continue;
-        }
+        if (!enemies[i].active) continue;
 
         enemies[i].oldX = enemies[i].x;
         enemies[i].oldY = enemies[i].y;
 
-        // Horizontal patrolling
-        enemies[i].x += (enemies[i].direction == DIR_RIGHT) ? enemies[i].xVel : -enemies[i].xVel;
+        // ==================================================
+        // PHASE 1 : FLOATING ENEMY
+        // ==================================================
+        if (enemies[i].phase == ENEMY_FLOATING) {
 
-        if (enemies[i].x <= enemies[i].minX) {
-            enemies[i].x = enemies[i].minX;
-            enemies[i].direction = DIR_RIGHT;
+            // Horizontal floating movement
+            enemies[i].x += (enemies[i].direction == DIR_RIGHT)
+                            ? enemies[i].xVel
+                            : -enemies[i].xVel;
+
+            if (enemies[i].x <= enemies[i].minX) {
+                enemies[i].x = enemies[i].minX;
+                enemies[i].direction = DIR_RIGHT;
+            }
+
+            if (enemies[i].x >= enemies[i].maxX) {
+                enemies[i].x = enemies[i].maxX;
+                enemies[i].direction = DIR_LEFT;
+            }
+
+            // Floating enemies can shoot
+            enemies[i].shootTimer--;
+            if (enemies[i].shootTimer <= 0) {
+                spawnEnemyBullet(&enemies[i]);
+                enemies[i].shootTimer = 75;
+            }
         }
 
-        if (enemies[i].x >= enemies[i].maxX) {
-            enemies[i].x = enemies[i].maxX;
-            enemies[i].direction = DIR_LEFT;
+        // ==================================================
+        // PHASE 2 : WALKING ENEMY (NO BALLOON)
+        // ==================================================
+        else if (enemies[i].phase == ENEMY_WALKING) {
+            int step;
+            int xDelta;
+
+            // Apply gravity with collision, one pixel at a time
+            enemies[i].yVel += 1;
+            if (enemies[i].yVel > 3) enemies[i].yVel = 3;
+
+            for (step = 0; step < enemies[i].yVel; step++) {
+                if (canMoveTo(enemies[i].x, enemies[i].y + 1,
+                              enemies[i].width, enemies[i].height)) {
+                    enemies[i].y++;
+                } else {
+                    enemies[i].yVel = 0;
+                    break;
+                }
+            }
+
+            // Horizontal movement with collision
+            xDelta = (enemies[i].direction == DIR_RIGHT) ? enemies[i].xVel : -enemies[i].xVel;
+            if (canMoveTo(enemies[i].x + xDelta, enemies[i].y,
+                          enemies[i].width, enemies[i].height)) {
+                enemies[i].x += xDelta;
+            } else {
+                // Flip direction on wall collision
+                enemies[i].direction = (enemies[i].direction == DIR_RIGHT) ? DIR_LEFT : DIR_RIGHT;
+            }
+
+            if (enemies[i].x <= enemies[i].minX) {
+                enemies[i].x = enemies[i].minX;
+                enemies[i].direction = DIR_RIGHT;
+            }
+
+            if (enemies[i].x >= enemies[i].maxX) {
+                enemies[i].x = enemies[i].maxX;
+                enemies[i].direction = DIR_LEFT;
+            }
+        }
+
+        // ==================================================
+        // PLAYER COLLISION
+        // ==================================================
+        if (collision(enemies[i].x, enemies[i].y,
+                    enemies[i].width, enemies[i].height,
+                    player.x, player.y,
+                    player.width, player.height)) {
+
+            // Player stomps enemy from above
+            if (player.y + player.height <= enemies[i].y + 4 &&
+                enemies[i].phase == ENEMY_WALKING) {
+
+                enemies[i].active = 0;
+                enemiesRemaining--;
+                score += SCORE_ENEMY_KILL;
+
+                player.yVel = -4; // bounce effect
+            }
+            else {
+                damagePlayer();
+            }
         }
 
         // Animation
         enemies[i].animCounter++;
-        if (enemies[i].animCounter > 16) {
+        if (enemies[i].animCounter >= 10) {
             enemies[i].animCounter = 0;
-            enemies[i].currentFrame ^= 1;
-        }
-
-        // Timed shooting
-        enemies[i].shootTimer--;
-        if (enemies[i].shootTimer <= 0) {
-            spawnEnemyBullet(&enemies[i]);
-            enemies[i].shootTimer = 75;
-        }
-
-        // Direct collision with the player also hurts
-        if (collision(enemies[i].x, enemies[i].y, enemies[i].width, enemies[i].height,
-                      player.x, player.y, player.width, player.height)) {
-            damagePlayer();
+            enemies[i].currentFrame =
+                (enemies[i].currentFrame + 1) % 3;
         }
     }
 }
@@ -676,6 +778,16 @@ int findGroundYBelow(int x, int y, int width, int height) {
 
 int findLowestGroundYAtX(int x, int width, int height) {
     return findGroundYBelow(x, 0, width, height);
+}
+
+int nextRandomSpriteVariant(void) {
+    // Simple xorshift RNG.
+    // Good enough for choosing one of the 4 balloon colors.
+    spriteRngState ^= spriteRngState << 13;
+    spriteRngState ^= spriteRngState >> 17;
+    spriteRngState ^= spriteRngState << 5;
+
+    return (int)(spriteRngState & 3);
 }
 
 int absInt(int x) {
@@ -946,57 +1058,75 @@ static void drawLoseScreen(void) {
 // ======================================================
 
 void drawPlayerSprite(int screenX, int screenY) {
-    int attr2 = ATTR2_TILEID((player.currentFrame ? OBJ_TILE_PLAYER1 : OBJ_TILE_PLAYER0), 0);
-
-    shadowOAM[0].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[0].attr1 = ATTR1_X(screenX) | ATTR1_SMALL |
-                         (player.direction == DIR_LEFT ? ATTR1_HFLIP : 0);
-    shadowOAM[0].attr2 = attr2;
-}
-
-void drawEnemySprite(int oamIndex, int screenX, int screenY) {
     int tileBase;
+    int movedUp   = (player.y < player.oldY);
+    int movedDown = (player.y > player.oldY) && !player.grounded;
 
-    if (enemies[oamIndex - 1].phase == ENEMY_WALKING) {
-        tileBase = enemies[oamIndex - 1].currentFrame ? OBJ_TILE_ENEMYW1 : OBJ_TILE_ENEMYW0;
+    if (movedUp) {
+        tileBase = OBJ_TILE_PLAYER_UP + player.currentFrame * 16;
+    } else if (movedDown) {
+        tileBase = OBJ_TILE_PLAYER_DOWN + player.currentFrame * 16;
+    } else if (player.direction == DIR_LEFT) {
+        tileBase = OBJ_TILE_PLAYER_LEFT + player.currentFrame * 16;
     } else {
-        tileBase = enemies[oamIndex - 1].currentFrame ? OBJ_TILE_ENEMYF1 : OBJ_TILE_ENEMYF0;
+        tileBase = OBJ_TILE_PLAYER_RIGHT + player.currentFrame * 16;
     }
 
-    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_SMALL |
-                                (enemies[oamIndex - 1].direction == DIR_LEFT ? ATTR1_HFLIP : 0);
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase, 0);
+    shadowOAM[0].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[0].attr1 = ATTR1_X(screenX - 4) | ATTR1_MEDIUM;
+    shadowOAM[0].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(0);
+}
+
+void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY) {
+    int tileBase = OBJ_TILE_ENEMY + (enemies[enemyIndex].currentFrame % 3) * 16;
+
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 4) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(0);
 }
 
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(enemyBullet ? OBJ_TILE_EBULLET : OBJ_TILE_BULLET, 0);
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(enemyBullet ? OBJ_TILE_EBULLET : OBJ_TILE_BULLET) | ATTR2_PALROW(0);
 }
 
-void drawBalloonSprite(int oamIndex, int screenX, int screenY) {
-    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_TALL | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_BALLOON, 0);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
+    // All variants use the same tiles; palette row 1-4 sets the color.
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 8) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_BALLOON) | ATTR2_PALROW((variant % 4) + 1);
 }
 
 void drawStarSprite(int oamIndex, int screenX, int screenY) {
-    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_SMALL;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_STAR, 0);
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 8) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_STAR) | ATTR2_PALROW(0);
 }
 
 void drawDoorSprite(int screenX, int screenY) {
-    shadowOAM[120].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[120].attr1 = ATTR1_X(screenX) | ATTR1_SMALL;
-    shadowOAM[120].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR, 0);
+    if (!doorOpen) {
+        // Closed door: 32x32 pixels = SQUARE + MEDIUM
+        shadowOAM[120].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
+        shadowOAM[120].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
+        shadowOAM[120].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_CLOSED) | ATTR2_PALROW(0);
+        shadowOAM[121].attr0 = ATTR0_HIDE;
+    } else {
+        // Open door top: 32x32 pixels = SQUARE + MEDIUM
+        shadowOAM[120].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
+        shadowOAM[120].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
+        shadowOAM[120].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_OPEN_TOP) | ATTR2_PALROW(0);
+        // Open door bottom row: 32x8 pixels = WIDE + SMALL, 32px below the top sprite
+        shadowOAM[121].attr0 = ATTR0_Y(screenY + 32) | ATTR0_WIDE | ATTR0_4BPP;
+        shadowOAM[121].attr1 = ATTR1_X(screenX) | ATTR1_SMALL;
+        shadowOAM[121].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_OPEN_BOT) | ATTR2_PALROW(0);
+    }
 }
 
 void hideUnusedSpritesFrom(int startIndex) {
     int i;
     for (i = startIndex; i < 128; i++) {
-        if (i == 120 && doorVisible) {
+        if (doorVisible && (i == 120 || i == 121)) {
             continue;
         }
         shadowOAM[i].attr0 = ATTR0_HIDE;
@@ -1142,231 +1272,227 @@ static void clearObjTiles(void) {
     }
 }
 
-static void buildSpriteTiles(void) {
-    u32* base = OBJ_TILE_MEM;
+static void copyObjTileRemapped(int dstTileIndex, int srcTileX, int srcTileY) {
     int i;
-    u8 pixels[64];
+    int srcTileIndex = srcTileY * 32 + srcTileX;
+    const unsigned char* src = ((const unsigned char*)spriteSheetTiles) + srcTileIndex * 32;
+    volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + dstTileIndex * 32);
+
+    // GBA VRAM does not support 8-bit writes -- they are ignored on hardware.
+    // We must write in 16-bit units. Process two bytes (4 pixels) per iteration.
+    for (i = 0; i < 32; i += 2) {
+        unsigned char b0 = src[i];
+        unsigned char b1 = src[i + 1];
+
+        unsigned char lo0 = b0 & 0x0F;
+        unsigned char hi0 = (b0 >> 4) & 0x0F;
+        unsigned char lo1 = b1 & 0x0F;
+        unsigned char hi1 = (b1 >> 4) & 0x0F;
+
+        // Remap: pink background (index 5) -> transparent (0).
+        // Indices 0-4 shift up by 1 to make room.
+        if (lo0 == 5) lo0 = 0; else if (lo0 < 5) lo0++;
+        if (hi0 == 5) hi0 = 0; else if (hi0 < 5) hi0++;
+        if (lo1 == 5) lo1 = 0; else if (lo1 < 5) lo1++;
+        if (hi1 == 5) hi1 = 0; else if (hi1 < 5) hi1++;
+
+        // Write two bytes as one 16-bit value.
+        dst[i / 2] = (lo0) | (hi0 << 4) | (lo1 << 8) | (hi1 << 12);
+    }
+}
+
+static void clearObjTileIndex(int tileIndex) {
+    int i;
+    volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
+
+    // Write 16-bit zeros -- GBA VRAM ignores 8-bit writes.
+    for (i = 0; i < 16; i++) {
+        dst[i] = 0;
+    }
+}
+
+static void copyFrameTo32x32Slot(int dstBaseTile, int srcTileX, int srcTileY, int widthTiles, int heightTiles) {
+    int row;
+    int col;
+
+    // 32x32 OBJ in 1D layout uses 16 contiguous tiles:
+    // row 0: +0 +1 +2 +3
+    // row 1: +4 +5 +6 +7
+    // row 2: +8 +9 +10 +11
+    // row 3: +12 +13 +14 +15
+    for (row = 0; row < 4; row++) {
+        for (col = 0; col < 4; col++) {
+            int dstTile = dstBaseTile + row * 4 + col;
+
+            if (row < heightTiles && col < widthTiles) {
+                copyObjTileRemapped(dstTile, srcTileX + col, srcTileY + row);
+            } else {
+                clearObjTileIndex(dstTile);
+            }
+        }
+    }
+}
+
+static void buildSimpleBulletTile(int tileIndex, unsigned char colorIndex) {
+    int i;
+    int x, y;
+    unsigned char tile[32];
+    volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
+
+    for (i = 0; i < 32; i++) {
+        tile[i] = 0;
+    }
+
+    for (y = 2; y <= 5; y++) {
+        for (x = 2; x <= 5; x++) {
+            int pixel = y * 8 + x;
+            int byteIndex = pixel >> 1;
+
+            if (pixel & 1) {
+                tile[byteIndex] = (tile[byteIndex] & 0x0F) | (colorIndex << 4);
+            } else {
+                tile[byteIndex] = (tile[byteIndex] & 0xF0) | colorIndex;
+            }
+        }
+    }
+
+    // GBA VRAM does not support 8-bit writes -- write 16 bits at a time.
+    for (i = 0; i < 16; i++) {
+        dst[i] = ((unsigned short)tile[i * 2]) | ((unsigned short)tile[i * 2 + 1] << 8);
+    }
+}
+
+static void buildSpriteTiles(void) {
+    int i;
 
     clearObjTiles();
 
-    // --------------------------------------------------
-    // Player frame 0 (16x16 = 4 tiles)
-    // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 2; y < 14; y++) {
-            for (x = 4; x < 12; x++) {
-                pixels[y * 16 + x] = 2;
-            }
-        }
-        for (y = 0; y < 4; y++) {
-            for (x = 5; x < 11; x++) {
-                pixels[y * 16 + x] = 6;
-            }
-        }
-        pixels[6 * 16 + 5] = 1;
-        pixels[6 * 16 + 10] = 1;
+    // Copy full palette first
+    for (i = 0; i < 256; i++) {
+        SPRITE_PAL[i] = spriteSheetPal[i];
     }
 
-    write4bppTile(base, OBJ_TILE_PLAYER0 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_PLAYER0 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_PLAYER0 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_PLAYER0 + 3, pixels + 136);
+    // Fix palette so transparent index is 0 and old 0..4 shift up to 1..5
+    SPRITE_PAL[0] = 0;
+    SPRITE_PAL[1] = spriteSheetPal[0];
+    SPRITE_PAL[2] = spriteSheetPal[1];
+    SPRITE_PAL[3] = spriteSheetPal[2];
+    SPRITE_PAL[4] = spriteSheetPal[3];
+    SPRITE_PAL[5] = spriteSheetPal[4];
 
     // --------------------------------------------------
-    // Player frame 1
+    // Duck frames
+    // Each frame is 3x3 tiles.
+    // There is one blank tile between frames horizontally.
+    // So starts are x = 0, 4, 8, 12.
+    //
+    // Rows start at:
+    // right = y 0
+    // left  = y 4
+    // up    = y 8
+    // down  = y 12
     // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 0 * 16,  0,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 1 * 16,  3,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 2 * 16,  6,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 3 * 16,  9,  0, 3, 3);
+
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 0 * 16,  0,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 1 * 16,  3,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 2 * 16,  6,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 3 * 16,  9,  4, 3, 3);
+
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 0 * 16,  0,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 1 * 16,  3,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 2 * 16,  6,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 3 * 16,  9,  8, 3, 3);
+
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 0 * 16,  0, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 1 * 16,  3, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 2 * 16,  6, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 3 * 16,  9, 12, 3, 3);
+    
+    // --------------------------------------------------
+    // Balloons
+    // These are 3x3 tiles each on tile row 17.
+    // No spacer tile between them.
+    // Starts: x = 0, 3, 6, 9
+    // --------------------------------------------------
+    
+    // All balloon variants share the same tiles; color comes from the palette row.
+    copyFrameTo32x32Slot(OBJ_TILE_BALLOON, 0, 17, 3, 3);
+
+    // Set up 4 balloon palette rows (rows 1-4 of sprite palette).
+    // Each row is a copy of row 0 with index 10 overridden to the balloon color
+    // and index 14 set to white for the highlight. Index 0 stays transparent.
     {
-        int x, y;
-        for (y = 2; y < 14; y++) {
-            for (x = 4; x < 12; x++) {
-                pixels[y * 16 + x] = 2;
-            }
-        }
-        for (y = 0; y < 4; y++) {
-            for (x = 5; x < 11; x++) {
-                pixels[y * 16 + x] = 6;
-            }
-        }
-        pixels[12 * 16 + 4] = 2;
-        pixels[13 * 16 + 4] = 2;
-        pixels[12 * 16 + 11] = 2;
-        pixels[13 * 16 + 11] = 2;
-    }
-
-    write4bppTile(base, OBJ_TILE_PLAYER1 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_PLAYER1 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_PLAYER1 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_PLAYER1 + 3, pixels + 136);
-
-    // --------------------------------------------------
-    // Floating enemy frames
-    // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 3; y < 13; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 16 + x] = 3;
-            }
-        }
-    }
-
-    write4bppTile(base, OBJ_TILE_ENEMYF0 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_ENEMYF0 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_ENEMYF0 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_ENEMYF0 + 3, pixels + 136);
-
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 2; y < 12; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 16 + x] = 3;
-            }
-        }
-    }
-
-    write4bppTile(base, OBJ_TILE_ENEMYF1 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_ENEMYF1 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_ENEMYF1 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_ENEMYF1 + 3, pixels + 136);
-
-    // --------------------------------------------------
-    // Walking enemy frames
-    // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 4; y < 14; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 16 + x] = 5;
-            }
-        }
-    }
-
-    write4bppTile(base, OBJ_TILE_ENEMYW0 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_ENEMYW0 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_ENEMYW0 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_ENEMYW0 + 3, pixels + 136);
-
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 4; y < 14; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 16 + x] = 5;
-            }
-        }
-        pixels[13 * 16 + 4] = 5;
-        pixels[13 * 16 + 10] = 5;
-    }
-
-    write4bppTile(base, OBJ_TILE_ENEMYW1 + 0, pixels);
-    write4bppTile(base, OBJ_TILE_ENEMYW1 + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_ENEMYW1 + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_ENEMYW1 + 3, pixels + 136);
-
-    // --------------------------------------------------
-    // Bullet tiles (8x8)
-    // --------------------------------------------------
-    {
-        u8 bullet[64] = {
-            0,0,6,6,6,6,0,0,
-            0,6,6,6,6,6,6,0,
-            6,6,6,6,6,6,6,6,
-            6,6,6,6,6,6,6,6,
-            6,6,6,6,6,6,6,6,
-            6,6,6,6,6,6,6,6,
-            0,6,6,6,6,6,6,0,
-            0,0,6,6,6,6,0,0
+        int row, idx;
+        // Pastel colors for the 4 balloon variants
+        unsigned short balloonColors[4] = {
+            RGB(12, 28, 14),  // row 1: pastel green
+            RGB(28, 14, 24),  // row 2: pastel pink
+            RGB(28, 20, 10),  // row 3: pastel orange
+            RGB(14, 18, 28)   // row 4: pastel blue
         };
 
-        u8 ebullet[64] = {
-            0,0,10,10,10,10,0,0,
-            0,10,10,10,10,10,10,0,
-            10,10,10,10,10,10,10,10,
-            10,10,10,10,10,10,10,10,
-            10,10,10,10,10,10,10,10,
-            10,10,10,10,10,10,10,10,
-            0,10,10,10,10,10,10,0,
-            0,0,10,10,10,10,0,0
-        };
-
-        write4bppTile(base, OBJ_TILE_BULLET, bullet);
-        write4bppTile(base, OBJ_TILE_EBULLET, ebullet);
-    }
-
-    // --------------------------------------------------
-    // Balloon (8x16 = 2 tiles)
-    // --------------------------------------------------
-    {
-        u8 balloon[128] = {0};
-        int x, y;
-        for (y = 0; y < 10; y++) {
-            for (x = 1; x < 7; x++) {
-                balloon[y * 8 + x] = 3;
+        for (row = 1; row <= 4; row++) {
+            // Copy palette row 0 as base so shared colors (outline, shadow) match
+            for (idx = 0; idx < 16; idx++) {
+                SPRITE_PAL[row * 16 + idx] = SPRITE_PAL[idx];
             }
-        }
-        balloon[10 * 8 + 3] = 3;
-        balloon[11 * 8 + 3] = 3;
-        balloon[12 * 8 + 3] = 1;
-
-        write4bppTile(base, OBJ_TILE_BALLOON + 0, balloon);
-        write4bppTile(base, OBJ_TILE_BALLOON + 1, balloon + 64);
-    }
-
-    // --------------------------------------------------
-    // Star (16x16 = 4 tiles)
-    // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        pixels[1 * 16 + 7] = 6;
-        pixels[2 * 16 + 7] = 6;
-        pixels[3 * 16 + 7] = 6;
-        for (x = 4; x < 11; x++) pixels[4 * 16 + x] = 6;
-        for (x = 3; x < 12; x++) pixels[5 * 16 + x] = 6;
-        for (x = 2; x < 13; x++) pixels[6 * 16 + x] = 6;
-        for (x = 1; x < 14; x++) pixels[7 * 16 + x] = 6;
-        for (x = 2; x < 13; x++) pixels[8 * 16 + x] = 6;
-        for (x = 3; x < 12; x++) pixels[9 * 16 + x] = 6;
-        for (x = 4; x < 11; x++) pixels[10 * 16 + x] = 6;
-        pixels[11 * 16 + 7] = 6;
-        pixels[12 * 16 + 7] = 6;
-        pixels[13 * 16 + 7] = 6;
-        for (y = 4; y < 11; y++) pixels[y * 16 + 7] = 6;
-    }
-
-    write4bppTile(base, OBJ_TILE_STAR + 0, pixels);
-    write4bppTile(base, OBJ_TILE_STAR + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_STAR + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_STAR + 3, pixels + 136);
-
-    // --------------------------------------------------
-    // Door (16x16 = 4 tiles)
-    // --------------------------------------------------
-    for (i = 0; i < 64; i++) pixels[i] = 0;
-    {
-        int x, y;
-        for (y = 0; y < 16; y++) {
-            for (x = 3; x < 13; x++) {
-                pixels[y * 16 + x] = 10;
-            }
-        }
-        for (y = 2; y < 14; y++) {
-            for (x = 5; x < 11; x++) {
-                pixels[y * 16 + x] = 6;
-            }
+            // Override index 10 with the balloon's fill color
+            SPRITE_PAL[row * 16 + 10] = balloonColors[row - 1];
+            // Override index 14 with bright white highlight
+            SPRITE_PAL[row * 16 + 14] = RGB(31, 31, 31);
         }
     }
 
-    write4bppTile(base, OBJ_TILE_DOOR + 0, pixels);
-    write4bppTile(base, OBJ_TILE_DOOR + 1, pixels + 8);
-    write4bppTile(base, OBJ_TILE_DOOR + 2, pixels + 128);
-    write4bppTile(base, OBJ_TILE_DOOR + 3, pixels + 136);
+    // --------------------------------------------------
+    // Enemy
+    // 3 frames, 3x3 tiles each, row starts at y = 22
+    // Starts: x = 0, 3, 6
+    // --------------------------------------------------
+    copyFrameTo32x32Slot(OBJ_TILE_ENEMY + 0 * 16, 0, 22, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_ENEMY + 1 * 16, 3, 22, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_ENEMY + 2 * 16, 6, 22, 3, 3);
+
+    // --------------------------------------------------
+    // Star
+    // User-provided location:
+    // top-left = (0, 26)
+    // 3x3 tiles
+    // --------------------------------------------------
+    copyFrameTo32x32Slot(OBJ_TILE_STAR, 0, 26, 3, 3);
+
+    // --------------------------------------------------
+    // Door
+    // Top row right side.
+    // Keep this here for now.
+    // Closed/open can be split later if needed.
+    // --------------------------------------------------
+    // Door closed: 4x4 tiles at sheet (13,0)
+    // --------------------------------------------------
+    copyFrameTo32x32Slot(OBJ_TILE_DOOR_CLOSED, 13, 0, 4, 4);
+
+    // --------------------------------------------------
+    // Door open top: rows 0-3 at sheet (18,0), 4x4 tiles
+    // --------------------------------------------------
+    copyFrameTo32x32Slot(OBJ_TILE_DOOR_OPEN_TOP, 18, 0, 4, 4);
+
+    // --------------------------------------------------
+    // Door open bottom: row 4 at sheet (18,4), 4 tiles wide x 1 tall
+    // WIDE+SMALL OBJ in 1D uses 4 consecutive tile slots
+    // --------------------------------------------------
+    copyObjTileRemapped(OBJ_TILE_DOOR_OPEN_BOT + 0, 18, 4);
+    copyObjTileRemapped(OBJ_TILE_DOOR_OPEN_BOT + 1, 19, 4);
+    copyObjTileRemapped(OBJ_TILE_DOOR_OPEN_BOT + 2, 20, 4);
+    copyObjTileRemapped(OBJ_TILE_DOOR_OPEN_BOT + 3, 21, 4);
+
+    // --------------------------------------------------
+    // Simple bullets so bullets always show up
+    // --------------------------------------------------
+    buildSimpleBulletTile(OBJ_TILE_BULLET, 3);
+    buildSimpleBulletTile(OBJ_TILE_EBULLET, 7);
 }
 
 // ======================================================
