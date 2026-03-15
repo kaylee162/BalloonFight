@@ -117,7 +117,7 @@ void buildLevel1MapAndCollision(void) {
 
     // Door position stays the same. It becomes visible after all enemies are defeated.
     // GO HERE TO UPDAYE DOOR LOCATION
-    doorX = 200;
+    doorX = 225;
     doorY = 192;
 
     // No manual collision grid build is needed because the bitmap already defines collision.
