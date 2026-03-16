@@ -7,4 +7,7 @@
 # Tech Setup
 
 # Bugs
-There is some weird bug in level one. Once you kill all the enemies, and there are balloons left over, there is one spot on the map where you cannot collect the balloon. On the far right side, right by the wall, if you try to collect a balloon after all enemies are gone, you will just push the balloon up. It's only in that spot, and its only after all enemies are dead. I think it has something to do with past logic, where I had ladders. In the collison map, if you collided with blue, it meant you were on a ladder and that had some logic to it. Maybe some of that lingered. It was palette index 4, (0,0,31).
+There is some weird bug in level one. once you kill all the enemies, sometimes bullets will linger, and you cannot collect the balloons. when you hit them, instead of collecting points and the balloons disappearing, the player just pushes the ballons. 
+the balloons also are not the correct color. they are supposed to be utilizing the sprite sheet palette, row 2, but they aren't, they are just gray. 
+couldn't get star sprite to work, so i drew it in the code, all game logic is there though. 
+glitching after the screen states in level one and level two. considerablly worse in level two. 

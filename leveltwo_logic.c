@@ -24,11 +24,36 @@ static void initStarsLevel2(void);
 void initLevel2(void) {
     int i;
 
+    // Fully reset Mode 0 backgrounds first
     initMode0();
 
-    setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
-    setupBackground(1, BG_PRIORITY(1) | BG_CHARBLOCK(LEVEL_CHARBLOCK) | BG_SCREENBLOCK(LEVEL_SCREENBLOCK) | BG_4BPP | BG_SIZE_WIDE);
+    setupBackground(0,
+        BG_PRIORITY(0) |
+        BG_CHARBLOCK(HUD_CHARBLOCK) |
+        BG_SCREENBLOCK(HUD_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_SMALL);
 
+    setupBackground(1,
+        BG_PRIORITY(1) |
+        BG_CHARBLOCK(LEVEL_CHARBLOCK) |
+        BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_WIDE);
+
+    // Clear out anything left from the intro/menu screen
+    clearHUD();
+    clearScreenblock(HUD_SCREENBLOCK);
+    clearScreenblock(LEVEL_SCREENBLOCK);
+    clearScreenblock(LEVEL_SCREENBLOCK + 1);
+    clearCharBlock(LEVEL_CHARBLOCK);
+    clearCharBlock(LEVEL_CHARBLOCK + 1);
+
+    // Hide all sprites immediately so no old OAM state lingers
+    hideSprites();
+    DMANow(3, shadowOAM, OAM, 128 * 4);
+
+    // Reload gameplay art
     loadBgPalette(tilesetPal, tilesetPalLen / 2);
     BG_PALETTE[240] = BLACK;
     BG_PALETTE[241] = WHITE;
@@ -39,6 +64,7 @@ void initLevel2(void) {
     setBackgroundOffset(0, 0, 0);
     setBackgroundOffset(1, 0, 0);
 
+    // Rebuild the level 2 map from scratch
     buildLevel2Map();
 
     // Clear player bullets
@@ -53,32 +79,30 @@ void initLevel2(void) {
         enemyBullets[i].active = 0;
     }
 
-    // No enemies in this traversal stage
+    // No enemies in level 2
     for (i = 0; i < MAX_ENEMIES; i++) {
         enemies[i].active = 0;
     }
 
-    // Initialize balloon pool first
+    // Reset balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         balloons[i].active = 0;
-        balloons[i].width = 8;
-        balloons[i].height = 16;
+        balloons[i].width = 24;
+        balloons[i].height = 24;
         balloons[i].spriteVariant = nextRandomSpriteVariant();
     }
 
-    // Place at least 10 balloons across the traversal route
     placeRandomLevel2Balloons();
     level2BalloonsRemaining = LEVEL2_BALLOON_COUNT;
 
-    // Set up moving stars
+    // Reset stars
     initStarsLevel2();
 
-    // Clean up any leftover menu / intro visuals before gameplay starts.
-    clearHUD();
-    hideSprites();
-
-    // Spawn the player using collision so they start on the left platform
+    // Reset the player for level 2
     resetPlayerForCurrentLevel();
+
+    // This prevents the intro screen from trying to redraw after the transition
+    menuNeedsRedraw = 0;
 }
 
 void buildLevel2Map(void) {
@@ -494,21 +518,24 @@ void drawSpritesLevel2(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff, balloons[i].y - level2VOff);
+            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff, balloons[i].y - level2VOff, balloons[i].spriteVariant);
             oamIndex++;
         }
     }
 
     // Stars
     for (i = 0; i < MAX_STARS; i++) {
-    if (stars[i].active) {
-        int screenX = stars[i].x - level2HOff;
+        if (stars[i].active) {
+            int screenX = stars[i].x - level2HOff;
+            int screenY = stars[i].y - level2VOff;
 
-        if (screenX > -8 && screenX < SCREENWIDTH) {
-            drawStarSprite(oamIndex, screenX, stars[i].y - level2VOff);
+            if (screenX > -8 && screenX < SCREENWIDTH &&
+                screenY > -8 && screenY < SCREENHEIGHT) {
+                drawStarSprite(oamIndex, screenX, screenY);
+                oamIndex++;
+            }
         }
     }
-}
 
     // Hide all remaining sprites
     hideUnusedSpritesFrom(oamIndex);

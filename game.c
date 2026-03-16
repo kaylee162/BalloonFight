@@ -130,6 +130,7 @@ static unsigned int spriteRngState = 0xA341316Cu;
 // Defer level VRAM/tilemap initialization until draw time.
 // This prevents intro-screen glitches when switching states.
 static int pendingLevel1Load = 0;
+static int pendingLevel2Load = 0;
 
 static void clearObjTileIndex(int tileIndex);
 // ======================================================
@@ -147,6 +148,7 @@ static void clearObjTiles(void);
 static void write4bppTile(u32* base, int tileIndex, const u8 pixels[64]);
 static void makeSolidTile(u32* base, int tileIndex, u8 color);
 static void makeGlyphTile(u32* base, int tileIndex, const u8 rows[8], u8 fg, u8 bg);
+static void buildSimpleStarTile(int tileIndex);
 
 // BG helpers
 void clearHUD(void);
@@ -203,7 +205,7 @@ void damagePlayer(void);
 void drawPlayerSprite(int screenX, int screenY);
 void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 
@@ -283,6 +285,10 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL1:
+            if (pendingLevel1Load) {
+                initLevel1();
+                pendingLevel1Load = 0;
+            }
             drawLevel1();
             break;
 
@@ -294,6 +300,10 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL2:
+            if (pendingLevel2Load) {
+                initLevel2();
+                pendingLevel2Load = 0;
+            }
             drawLevel2();
             break;
 
@@ -326,7 +336,7 @@ void drawGame(void) {
 
 static void updateStart(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        initLevel1();
+        pendingLevel1Load = 1;
         state = STATE_LEVEL1;
     }
 }
@@ -342,9 +352,9 @@ static void updateLevel1Intro(void) {
 
 static void updateLevel2Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        // Do NOT initialize the level here.
         // Defer the actual VRAM/tilemap setup until drawGame(), after VBlank.
-        initLevel2();
+        pendingLevel2Load = 1;
+        menuNeedsRedraw = 0;
         state = STATE_LEVEL2;
     }
 }
@@ -1154,28 +1164,18 @@ void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(enemyBullet ? OBJ_TILE_EBULLET : OBJ_TILE_BULLET) | ATTR2_PALROW(0);
 }
 
-void drawBalloonSprite(int oamIndex, int screenX, int screenY) {
-    // Cycle through palette rows 1-4 so each balloon index gets a different
-    // pastel colour. Row 0 is the base sprite palette; rows 1-4 are the
-    // balloon colour variants set up in buildSpriteTiles().
-    int palRow = (oamIndex % 4) + 1;
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
+    int tileBase = OBJ_TILE_BALLOON + ((variant & 3) * 16);
 
-    // The balloon is a 3x3 tile sprite loaded with copyFrameTo32x32Slot,
-    // so use ATTR1_MEDIUM (32x32 OBJ) to display it correctly.
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_BALLOON) | ATTR2_PALROW(palRow);
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(0);
 }
 
 void drawStarSprite(int oamIndex, int screenX, int screenY) {
-    // Star is a 3x3 tile (24x24px) sprite loaded with copyFrameTo32x32Slot.
-    // ATTR1_MEDIUM (32x32 OBJ) is required to display the full frame correctly.
-    // Previously ATTR1_SMALL (16x16) was used, which only showed the top-left
-    // 2x2 tiles and clipped the rest — and copyObjTileRemapped only wrote one
-    // tile anyway, so the sprite was essentially invisible.
-    // OAM priority 0 (default) keeps the star in front of BG1 (the tilemap).
+    // Simple 8x8 OBJ star built directly in code.
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_STAR) | ATTR2_PALROW(0);
 }
 
@@ -1220,6 +1220,26 @@ static void buildSimpleBulletTile(int tileIndex, u8 colorIndex) {
         0,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,0,
         0,0,colorIndex,colorIndex,colorIndex,colorIndex,0,0
     };
+    write4bppTile(OBJ_TILE_MEM, tileIndex, pixels);
+}
+
+static void buildSimpleStarTile(int tileIndex) {
+    // Palette indices pulled from the sprite sheet palette:
+    // 0  = transparent
+    // 5  = dark outline
+    // 15 = orange fill
+    // 3  = darker orange accent
+    u8 pixels[64] = {
+        0,0,0,5,5,0,0,0,
+        0,0,5,15,15,5,0,0,
+        0,5,15,15,15,15,5,0,
+        5,15,15,3,3,15,15,5,
+        0,5,15,15,15,15,5,0,
+        0,0,5,15,15,5,0,0,
+        0,0,0,5,5,0,0,0,
+        0,0,0,0,0,0,0,0
+    };
+
     write4bppTile(OBJ_TILE_MEM, tileIndex, pixels);
 }
 
@@ -1368,8 +1388,9 @@ static void copyObjTileRemapped(int dstTileIndex, int srcTileX, int srcTileY) {
     const unsigned char* src = ((const unsigned char*)spriteSheetTiles) + srcTileIndex * 32;
     volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + dstTileIndex * 32);
 
-    // GBA VRAM does not support 8-bit writes -- they are ignored on hardware.
-    // We must write in 16-bit units. Process two bytes (4 pixels) per iteration.
+    // The sprite sheet already uses palette index 0 as magenta/transparent.
+    // Preserve the original indices exactly so the artist-authored colors line up
+    // with the exported palette. Only 16-bit writes are allowed in VRAM.
     for (i = 0; i < 32; i += 2) {
         unsigned char b0 = src[i];
         unsigned char b1 = src[i + 1];
@@ -1379,14 +1400,6 @@ static void copyObjTileRemapped(int dstTileIndex, int srcTileX, int srcTileY) {
         unsigned char lo1 = b1 & 0x0F;
         unsigned char hi1 = (b1 >> 4) & 0x0F;
 
-        // Remap: pink background (index 5) -> transparent (0).
-        // Indices 0-4 shift up by 1 to make room.
-        if (lo0 == 5) lo0 = 0; else if (lo0 < 5) lo0++;
-        if (hi0 == 5) hi0 = 0; else if (hi0 < 5) hi0++;
-        if (lo1 == 5) lo1 = 0; else if (lo1 < 5) lo1++;
-        if (hi1 == 5) hi1 = 0; else if (hi1 < 5) hi1++;
-
-        // Write two bytes as one 16-bit value.
         dst[i / 2] = (lo0) | (hi0 << 4) | (lo1 << 8) | (hi1 << 12);
     }
 }
@@ -1428,79 +1441,51 @@ static void buildSpriteTiles(void) {
 
     clearObjTiles();
 
-    // Copy full palette first
+    // Copy the exported sprite palette directly.
     for (i = 0; i < 256; i++) {
         SPRITE_PAL[i] = spriteSheetPal[i];
     }
 
-    // Fix palette so transparent index is 0 and old 0..4 shift up to 1..5
+    // Palette index 0 in the sheet is magenta and should be transparent.
     SPRITE_PAL[0] = 0;
-    SPRITE_PAL[1] = spriteSheetPal[0];
-    SPRITE_PAL[2] = spriteSheetPal[1];
-    SPRITE_PAL[3] = spriteSheetPal[2];
-    SPRITE_PAL[4] = spriteSheetPal[3];
-    SPRITE_PAL[5] = spriteSheetPal[4];
 
     // --------------------------------------------------
     // Duck frames
     // Each frame is 3x3 tiles.
-    // There is one blank tile between frames horizontally.
-    // So starts are x = 0, 4, 8, 12.
+    // Frames are packed directly next to each other horizontally.
+    // Direction rows are separated vertically by one blank tile.
     // --------------------------------------------------
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 0 * 16,  0,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 1 * 16,  4,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 2 * 16,  8,  0, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 3 * 16, 12,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 1 * 16,  3,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 2 * 16,  6,  0, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_RIGHT + 3 * 16,  9,  0, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 0 * 16,  0,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 1 * 16,  4,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 2 * 16,  8,  4, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 3 * 16, 12,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 1 * 16,  3,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 2 * 16,  6,  4, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_LEFT  + 3 * 16,  9,  4, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 0 * 16,  0,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 1 * 16,  4,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 2 * 16,  8,  8, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 3 * 16, 12,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 1 * 16,  3,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 2 * 16,  6,  8, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_UP    + 3 * 16,  9,  8, 3, 3);
 
     copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 0 * 16,  0, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 1 * 16,  4, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 2 * 16,  8, 12, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 3 * 16, 12, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 1 * 16,  3, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 2 * 16,  6, 12, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_PLAYER_DOWN  + 3 * 16,  9, 12, 3, 3);
         
     // --------------------------------------------------
     // Balloons
-    // These are 3x3 tiles each on tile row 17.
-    // No spacer tile between them.
-    // Starts: x = 0, 3, 6, 9
+    // Each balloon frame is 3x3 tiles on row 17.
+    // The artist exported four actual color variants at x = 0, 3, 6, 9.
+    // Copy each one into its own OBJ slot so we preserve the pastel colors
+    // exactly as they appear in the sprite sheet.
     // --------------------------------------------------
-    
-    // All balloon variants share the same tiles; color comes from the palette row.
-    copyFrameTo32x32Slot(OBJ_TILE_BALLOON, 0, 17, 3, 3);
-
-    // Set up 4 balloon palette rows (rows 1-4 of sprite palette).
-    // Each row is a copy of row 0 with index 10 overridden to the balloon color
-    // and index 14 set to white for the highlight. Index 0 stays transparent.
-    {
-        int row, idx;
-        // Pastel colors for the 4 balloon variants
-        unsigned short balloonColors[4] = {
-            RGB(12, 28, 14),  // row 1: pastel green
-            RGB(28, 14, 24),  // row 2: pastel pink
-            RGB(28, 20, 10),  // row 3: pastel orange
-            RGB(14, 18, 28)   // row 4: pastel blue
-        };
-
-        for (row = 1; row <= 4; row++) {
-            // Copy palette row 0 as base so shared colors (outline, shadow) match
-            for (idx = 0; idx < 16; idx++) {
-                SPRITE_PAL[row * 16 + idx] = SPRITE_PAL[idx];
-            }
-            // Override index 10 with the balloon's fill color
-            SPRITE_PAL[row * 16 + 10] = balloonColors[row - 1];
-            // Override index 14 with bright white highlight
-            SPRITE_PAL[row * 16 + 14] = RGB(31, 31, 31);
-        }
-    }
+    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 0 * 16, 0, 17, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 1 * 16, 3, 17, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 2 * 16, 6, 17, 3, 3);
+    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 3 * 16, 9, 17, 3, 3);
 
     // --------------------------------------------------
     // Enemy
@@ -1513,12 +1498,10 @@ static void buildSpriteTiles(void) {
 
     // --------------------------------------------------
     // Star
-    // 3x3 tiles starting at sheet position (13,4) — directly below the door.
-    // Use copyFrameTo32x32Slot so all 9 tiles of the 24x24 sprite are copied,
-    // matching the ATTR1_MEDIUM draw call in drawStarSprite().
-    // copyObjTileRemapped only copied one 8x8 tile, leaving the rest blank.
+    // Build a simple 8x8 star directly in code so it stays fully Mode 0
+    // and doesn't depend on the sprite sheet.
     // --------------------------------------------------
-    copyFrameTo32x32Slot(OBJ_TILE_STAR, 13, 4, 3, 3);
+    buildSimpleStarTile(OBJ_TILE_STAR);
     // --------------------------------------------------
     // Door
     // Top row right side.
