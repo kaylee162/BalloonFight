@@ -130,12 +130,8 @@ static unsigned int spriteRngState = 0xA341316Cu;
 // Defer level VRAM/tilemap initialization until draw time.
 // This prevents intro-screen glitches when switching states.
 static int pendingLevel1Load = 0;
-static int pendingLevel2Load = 0;
 
 static void clearObjTileIndex(int tileIndex);
-static void buildSimpleStarTile(int tileIndex);
-static void setObjTilePixel4bpp(int tileIndex, int x, int y, unsigned char colorIndex);
-
 // ======================================================
 //                   FORWARD DECLARATIONS
 // ======================================================
@@ -144,14 +140,12 @@ static void setObjTilePixel4bpp(int tileIndex, int x, int y, unsigned char color
 static void initGraphics(void);
 static void initPalettes(void);
 static void buildHudTiles(void);
-static void buildBackgroundTiles(void);
 static void buildSpriteTiles(void);
 static void clearObjTiles(void);
 
 // Tile helpers
 static void write4bppTile(u32* base, int tileIndex, const u8 pixels[64]);
 static void makeSolidTile(u32* base, int tileIndex, u8 color);
-static void makeCheckerTile(u32* base, int tileIndex, u8 c1, u8 c2);
 static void makeGlyphTile(u32* base, int tileIndex, const u8 rows[8], u8 fg, u8 bg);
 
 // BG helpers
@@ -184,6 +178,7 @@ static void updatePause(void);
 static void updateLevel2Intro(void);
 static void updateWin(void);
 static void updateLose(void);
+static void clearMenuBackground(unsigned short entry);
 
 // Object updates
 void updatePlayerAnimation(void);
@@ -208,7 +203,7 @@ void damagePlayer(void);
 void drawPlayerSprite(int screenX, int screenY);
 void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 
@@ -288,10 +283,6 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL1:
-            if (pendingLevel1Load) {
-                initLevel1();
-                pendingLevel1Load = 0;
-            }
             drawLevel1();
             break;
 
@@ -303,10 +294,6 @@ void drawGame(void) {
             break;
 
         case STATE_LEVEL2:
-            if (pendingLevel2Load) {
-                initLevel2();
-                pendingLevel2Load = 0;
-            }
             drawLevel2();
             break;
 
@@ -339,8 +326,8 @@ void drawGame(void) {
 
 static void updateStart(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
-        state = STATE_LEVEL1_INTRO;
-        menuNeedsRedraw = 1;
+        initLevel1();
+        state = STATE_LEVEL1;
     }
 }
 
@@ -357,7 +344,7 @@ static void updateLevel2Intro(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         // Do NOT initialize the level here.
         // Defer the actual VRAM/tilemap setup until drawGame(), after VBlank.
-        pendingLevel2Load = 1;
+        initLevel2();
         state = STATE_LEVEL2;
     }
 }
@@ -421,15 +408,20 @@ void resetPlayerForCurrentLevel(void) {
 }
 
 void updatePlayerAnimation(void) {
+    // Snap to frame 0 when idle so the sprite rests in a clean pose.
     if (!player.isMoving) {
         player.currentFrame = 0;
-        player.animCounter = 0;
+        player.animCounter  = 0;
         return;
     }
 
+    // Advance the counter each frame the player is moving.
+    // At 60fps a threshold of 8 gives roughly 7-8 frame changes per second,
+    // producing a smooth 4-frame walk/fly cycle.
     player.animCounter++;
     if (player.animCounter >= 8) {
-        player.animCounter = 0;
+        player.animCounter  = 0;
+        // Cycle 0 -> 1 -> 2 -> 3 -> 0 through all four animation frames.
         player.currentFrame = (player.currentFrame + 1) % 4;
     }
 }
@@ -1089,6 +1081,14 @@ static void restorePausedGameplayLayers(void) {
     }
 }
 
+static void clearMenuBackground(unsigned short entry) {
+    int i;
+    /* Fill the level screenblock with a single tile entry (usually 0 = blank) */
+    for (i = 0; i < 32 * 32; i++) {
+        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[i] = entry;
+    }
+}
+
 static void drawStartScreen(void) {
     drawInfoScreen("BALLOON FIGHT", "PRESS START TO PLAY");
 }
@@ -1098,6 +1098,8 @@ static void drawLevel1IntroScreen(void) {
 }
 
 static void drawLevel2IntroScreen(void) {
+    prepareMenuLayers();
+    clearMenuBackground(0);
     drawInfoScreen("BALLOON FIGHT", "LEVEL TWO PRESS START");
 }
 
@@ -1117,6 +1119,7 @@ static void drawLoseScreen(void) {
 //                  SPRITE DRAWING HELPERS
 // ======================================================
 
+//HERE
 void drawPlayerSprite(int screenX, int screenY) {
     int tileBase;
     int movedUp   = (player.y < player.oldY);
@@ -1151,16 +1154,28 @@ void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(enemyBullet ? OBJ_TILE_EBULLET : OBJ_TILE_BULLET) | ATTR2_PALROW(0);
 }
 
-void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
-    // All variants use the same tiles; palette row 1-4 sets the color.
-    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 8) | ATTR1_MEDIUM;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_BALLOON) | ATTR2_PALROW((variant % 4) + 1);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY) {
+    // Cycle through palette rows 1-4 so each balloon index gets a different
+    // pastel colour. Row 0 is the base sprite palette; rows 1-4 are the
+    // balloon colour variants set up in buildSpriteTiles().
+    int palRow = (oamIndex % 4) + 1;
+
+    // The balloon is a 3x3 tile sprite loaded with copyFrameTo32x32Slot,
+    // so use ATTR1_MEDIUM (32x32 OBJ) to display it correctly.
+    shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_BALLOON) | ATTR2_PALROW(palRow);
 }
 
 void drawStarSprite(int oamIndex, int screenX, int screenY) {
+    // Star is a 3x3 tile (24x24px) sprite loaded with copyFrameTo32x32Slot.
+    // ATTR1_MEDIUM (32x32 OBJ) is required to display the full frame correctly.
+    // Previously ATTR1_SMALL (16x16) was used, which only showed the top-left
+    // 2x2 tiles and clipped the rest — and copyObjTileRemapped only wrote one
+    // tile anyway, so the sprite was essentially invisible.
+    // OAM priority 0 (default) keeps the star in front of BG1 (the tilemap).
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
-    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
+    shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(OBJ_TILE_STAR) | ATTR2_PALROW(0);
 }
 
@@ -1193,71 +1208,47 @@ void hideUnusedSpritesFrom(int startIndex) {
     }
 }
 
-static void setObjTilePixel4bpp(int tileIndex, int x, int y, unsigned char colorIndex) {
-    volatile unsigned short* dst;
-    int pixelIndex;
-    int halfwordIndex;
-    int shift;
-    unsigned short value;
-
-    if (x < 0 || x >= 8 || y < 0 || y >= 8) {
-        return;
-    }
-
-    dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
-
-    pixelIndex = y * 8 + x;
-    halfwordIndex = pixelIndex >> 2;          // 4 pixels per halfword
-    shift = (pixelIndex & 3) * 4;
-
-    value = dst[halfwordIndex];
-    value &= ~(0xF << shift);
-    value |= (colorIndex & 0xF) << shift;
-    dst[halfwordIndex] = value;
+static void buildSimpleBulletTile(int tileIndex, u8 colorIndex) {
+    /* Build a simple 8x8 circular bullet tile using the given palette index. */
+    u8 pixels[64] = {
+        0,0,colorIndex,colorIndex,colorIndex,colorIndex,0,0,
+        0,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,0,
+        colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,
+        colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,
+        colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,
+        colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,
+        0,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,colorIndex,0,
+        0,0,colorIndex,colorIndex,colorIndex,colorIndex,0,0
+    };
+    write4bppTile(OBJ_TILE_MEM, tileIndex, pixels);
 }
 
-static void buildSimpleStarTile(int tileIndex) {
-    int x, y;
-
-    clearObjTileIndex(tileIndex);
-
-    // Small 8x8 white sparkle with dark outline.
-    // Uses palette row 0.
-    for (y = 0; y < 8; y++) {
-        for (x = 0; x < 8; x++) {
-            int dx = absInt(x - 3);
-            int dy = absInt(y - 3);
-
-            // Outline
-            if ((dx == 0 && dy <= 3) ||
-                (dy == 0 && dx <= 3) ||
-                (dx == dy && dx <= 2)) {
-                setObjTilePixel4bpp(tileIndex, x, y, 9);
-            }
-
-            // Fill
-            if ((dx == 0 && dy <= 2) ||
-                (dy == 0 && dx <= 2) ||
-                (dx == dy && dx <= 1)) {
-                setObjTilePixel4bpp(tileIndex, x, y, 1);
-            }
-        }
-    }
-}
 // ======================================================
 //                  GRAPHICS / TILE BUILDING
 // ======================================================
 
 static void initGraphics(void) {
+    // Keep the whole game in Mode 0.
     initMode0();
 
+    // Load the artist-made tileset and palette used by the level tilemaps.
+    loadBgPalette(tilesetPal, tilesetPalLen / 2);
+    loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
+
+    // Build HUD font tiles in their own charblock.
     buildHudTiles();
+
+    // Load sprite palette BEFORE building sprite tiles so that the colour
+    // assignments made in buildSpriteTiles() use the correct palette indices.
+    // This call was previously missing, which left SPRITE_PAL[0] as whatever
+    // the GBA BIOS happened to leave in memory (usually 0 = black), causing
+    // all transparent regions of sprites to render as solid black.
+    initPalettes();
+
+    // Build OBJ tiles for player, enemies, bullets, balloons, stars, and door.
     buildSpriteTiles();
 
-    // Default font colors in palette row 15
-    BG_PALETTE[240] = BLACK;
-    BG_PALETTE[241] = WHITE;
-
+    // Hide every sprite initially.
     hideSprites();
 }
 
@@ -1284,12 +1275,15 @@ static void initPalettes(void) {
     SPRITE_PAL[0] = RGB(0, 0, 0);
     SPRITE_PAL[1] = RGB(31, 31, 31);
     SPRITE_PAL[2] = RGB(31, 24, 8);
-    SPRITE_PAL[3] = RGB(31, 10, 16);
-    SPRITE_PAL[4] = RGB(8, 16, 31);
-    SPRITE_PAL[5] = RGB(10, 28, 10);
-    SPRITE_PAL[6] = RGB(31, 31, 0);
-    SPRITE_PAL[7] = RGB(20, 10, 31);
-    SPRITE_PAL[8] = RGB(31, 18, 0);
+    // Pastel balloon colours — one per palette slot so each balloon index can
+    // pick a different hue.  Slots 3-8 map to: pink, sky-blue, mint-green,
+    // lemon-yellow, lavender, and peach.
+    SPRITE_PAL[3] = RGB(31, 18, 22);   /* pastel pink    */
+    SPRITE_PAL[4] = RGB(16, 24, 31);   /* pastel sky-blue */
+    SPRITE_PAL[5] = RGB(16, 31, 20);   /* pastel mint    */
+    SPRITE_PAL[6] = RGB(31, 31, 14);   /* pastel lemon   */
+    SPRITE_PAL[7] = RGB(24, 18, 31);   /* pastel lavender*/
+    SPRITE_PAL[8] = RGB(31, 22, 14);   /* pastel peach   */
     SPRITE_PAL[9] = RGB(20, 20, 20);
     SPRITE_PAL[10] = RGB(31, 0, 0);
     SPRITE_PAL[11] = RGB(0, 31, 0);
@@ -1361,21 +1355,6 @@ static void buildHudTiles(void) {
     }
 }
 
-static void buildBackgroundTiles(void) {
-    u32* base = BG_TILE_MEM + (LEVEL_CHARBLOCK * 1024);
-
-    clearCharBlock(LEVEL_CHARBLOCK);
-
-    makeSolidTile(base, TILE_BLANK, 0);
-    makeSolidTile(base, TILE_SOLID, 10);
-    makeCheckerTile(base, TILE_PLATFORM, 10, 11);
-    makeSolidTile(base, TILE_SKY, 14);
-    makeCheckerTile(base, TILE_CLOUD, 15, 14);
-    makeCheckerTile(base, TILE_STARBG, 8, 14);
-    makeCheckerTile(base, TILE_DOOR, 6, 10);
-    makeCheckerTile(base, TILE_BALLOONBG, 13, 14);
-}
-
 static void clearObjTiles(void) {
     int i;
     for (i = 0; i < 1024 * 16; i++) {
@@ -1441,35 +1420,6 @@ static void copyFrameTo32x32Slot(int dstBaseTile, int srcTileX, int srcTileY, in
                 clearObjTileIndex(dstTile);
             }
         }
-    }
-}
-
-static void buildSimpleBulletTile(int tileIndex, unsigned char colorIndex) {
-    int i;
-    int x, y;
-    unsigned char tile[32];
-    volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
-
-    for (i = 0; i < 32; i++) {
-        tile[i] = 0;
-    }
-
-    for (y = 2; y <= 5; y++) {
-        for (x = 2; x <= 5; x++) {
-            int pixel = y * 8 + x;
-            int byteIndex = pixel >> 1;
-
-            if (pixel & 1) {
-                tile[byteIndex] = (tile[byteIndex] & 0x0F) | (colorIndex << 4);
-            } else {
-                tile[byteIndex] = (tile[byteIndex] & 0xF0) | colorIndex;
-            }
-        }
-    }
-
-    // GBA VRAM does not support 8-bit writes -- write 16 bits at a time.
-    for (i = 0; i < 16; i++) {
-        dst[i] = ((unsigned short)tile[i * 2]) | ((unsigned short)tile[i * 2 + 1] << 8);
     }
 }
 
@@ -1563,10 +1513,12 @@ static void buildSpriteTiles(void) {
 
     // --------------------------------------------------
     // Star
-    // The star comes directly from the sprite sheet at tile (13,4).
+    // 3x3 tiles starting at sheet position (13,4) — directly below the door.
+    // Use copyFrameTo32x32Slot so all 9 tiles of the 24x24 sprite are copied,
+    // matching the ATTR1_MEDIUM draw call in drawStarSprite().
+    // copyObjTileRemapped only copied one 8x8 tile, leaving the rest blank.
     // --------------------------------------------------
-    copyObjTileRemapped(OBJ_TILE_STAR, 13, 4);
-
+    copyFrameTo32x32Slot(OBJ_TILE_STAR, 13, 4, 3, 3);
     // --------------------------------------------------
     // Door
     // Top row right side.
@@ -1626,19 +1578,6 @@ static void makeSolidTile(u32* base, int tileIndex, u8 color) {
 
     for (i = 0; i < 64; i++) {
         pixels[i] = color;
-    }
-
-    write4bppTile(base, tileIndex, pixels);
-}
-
-static void makeCheckerTile(u32* base, int tileIndex, u8 c1, u8 c2) {
-    u8 pixels[64];
-    int x, y;
-
-    for (y = 0; y < 8; y++) {
-        for (x = 0; x < 8; x++) {
-            pixels[y * 8 + x] = ((x + y) & 1) ? c1 : c2;
-        }
     }
 
     write4bppTile(base, tileIndex, pixels);
