@@ -52,7 +52,18 @@
 
 #define FONT_BASE_TILE 32
 
-#define OBJ_TILE_STAR            38
+// OBJ tile layout
+// Player right:  0   - 63
+// Player left:   64  - 127
+// Player up:     128 - 191
+// Player down:   192 - 255
+// Enemy:         256 - 303
+// Star:          304
+// Bullets:       305 - 306
+// Balloons:      320 - 383
+// Door:          400+
+
+#define OBJ_TILE_STAR            304
 #define OBJ_TILE_BULLET          305
 #define OBJ_TILE_EBULLET         306
 #define OBJ_TILE_BALLOON         320
@@ -207,7 +218,7 @@ void updateEnemies(void);
 void drawPlayerSprite(int screenX, int screenY);
 void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 void hideUnusedSpritesFrom(int startIndex);

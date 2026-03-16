@@ -90,8 +90,8 @@ void initLevel1(void) {
 
     for (i = 0; i < MAX_BALLOONS; i++) {
         balloons[i].active = 0;
-        balloons[i].width = 8;
-        balloons[i].height = 16;
+        balloons[i].width = 24;
+        balloons[i].height = 24;
         balloons[i].spriteVariant = nextRandomSpriteVariant();
     }
 
@@ -428,7 +428,8 @@ void drawSpritesLevel1(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff);            oamIndex++;
+            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff, balloons[i].spriteVariant);
+            oamIndex++;
         }
     }
 
