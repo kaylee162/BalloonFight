@@ -3,6 +3,7 @@
 #include "sprites.h"
 #include "print.h"
 #include "game.h"
+#include "sfx.h"
 
 // These globals are declared as extern in gba.h
 // They must be defined exactly once somewhere in the project
@@ -26,6 +27,9 @@ int main() {
     // Initialize button states before the loop starts
     buttons = REG_BUTTONS;
     oldButtons = buttons;
+
+    // Initialize sound once
+    sfxInit();
 
     // Set up the display in Mode 0 with backgrounds and sprites enabled
     initMode0();

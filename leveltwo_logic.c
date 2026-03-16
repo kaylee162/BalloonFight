@@ -1,8 +1,10 @@
 #include "game.h"
 #include "leveltwo_logic.h"
-#include "leveltwo.h"
+#include "sfx.h"
 
 #include "tileset.h"
+#include "leveltwo.h"
+#include "collisionMapTwo.h"
 
 // Private helper
 static void initStarsLevel2(void);
@@ -138,6 +140,7 @@ void updateLevel2(void) {
     setBackgroundOffset(1, level2HOff, level2VOff);
 
     if (level2BalloonsRemaining <= 0) {
+        sfxWin();
         state = STATE_WIN;
         menuNeedsRedraw = 1;
         return;
@@ -314,6 +317,8 @@ void updateBalloonsLevel2(void) {
             } else {
                 player.lives++;
             }
+
+            sfxBalloon();
         }
     }
 }
@@ -357,6 +362,9 @@ void updateStars(void) {
         // Damage player on contact
         if (collision(stars[i].x, stars[i].y, stars[i].width, stars[i].height,
                       player.x, player.y, player.width, player.height)) {
+            if (player.invincibleTimer <= 0) {
+                sfxStarHit();
+            }
             damagePlayer();
         }
     }

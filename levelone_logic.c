@@ -1,6 +1,7 @@
 #include "game.h"
 #include "levelone_logic.h"
 #include "leveltwo_logic.h"
+#include "sfx.h"
 
 #include "tileset.h"
 #include "levelone.h"
@@ -152,8 +153,9 @@ void updateLevel1(void) {
     level1VOff = CLAMP(player.y - (SCREENHEIGHT / 2), 0, LEVEL1_PIXEL_H - SCREENHEIGHT);
     setBackgroundOffset(1, level1HOff, level1VOff);
 
-    if (enemiesRemaining <= 0) {
+    if (enemiesRemaining <= 0 && !doorVisible) {
         doorVisible = 1;
+        sfxDoorAppear();
     }
 
     if (doorVisible) {
@@ -163,8 +165,10 @@ void updateLevel1(void) {
             if (!doorOpen) {
                 // First contact: open the door
                 doorOpen = 1;
+                sfxDoorOpen();
             } else {
                 // Second contact while open: enter and advance to level 2
+                sfxDoorEnter();
                 state = STATE_LEVEL2_INTRO;
                 menuNeedsRedraw = 1;
                 return;
@@ -379,12 +383,14 @@ void updateBalloonsLevel1(void) {
             balloons[i].active = 0;
 
             // Collecting a balloon always awards points — same behaviour whether
-            // enemies are still alive or not.  If the player is injured they also
-            // gain a life (capped at 3) in addition to the score bonus.
+            // or not the player also gains a life.
             score += SCORE_BALLOON_BONUS;
+
             if (player.lives < 3) {
                 player.lives++;
             }
+
+            sfxBalloon();
         }
     }
 }
