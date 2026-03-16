@@ -5,6 +5,7 @@
 #include "game.h"
 #include "levelone_logic.h"
 #include "leveltwo_logic.h"
+#include "sfx.h"
 
 #include "tileset.h"
 #include "levelone.h"
@@ -454,6 +455,9 @@ void firePlayerBullet(void) {
             playerBullets[i].oldY = playerBullets[i].y;
             playerBullets[i].xVel = (player.direction == DIR_RIGHT) ? 3 : -3;
             playerBullets[i].yVel = 0;
+
+            sfxShoot();
+
             break;
         }
     }
@@ -481,7 +485,7 @@ void updatePlayerBullets(void) {
         for (j = 0; j < MAX_ENEMIES; j++) {
             if (!enemies[j].active) continue;
 
-            if (collision(playerBullets[i].x, playerBullets[i].y,
+                if (collision(playerBullets[i].x, playerBullets[i].y,
                         playerBullets[i].width, playerBullets[i].height,
                         enemies[j].x, enemies[j].y,
                         enemies[j].width, enemies[j].height)) {
@@ -500,9 +504,13 @@ void updatePlayerBullets(void) {
                         enemies[j].phase = ENEMY_DEAD;
                         enemiesRemaining--;
                         score += SCORE_ENEMY_KILL;
+
+                        sfxBomb();
                     } else {
                         enemies[j].phase = ENEMY_WALKING;
                         enemies[j].yVel = 2;
+
+                        sfxEnemyDrop();
                     }
 
                 }
@@ -516,6 +524,8 @@ void updatePlayerBullets(void) {
 
                     enemiesRemaining--;
                     score += SCORE_ENEMY_KILL;
+
+                    sfxBomb();
                 }
 
                 break;
@@ -538,6 +548,9 @@ static void spawnEnemyBullet(Enemy* e) {
             enemyBullets[i].oldY = enemyBullets[i].y;
             enemyBullets[i].xVel = (e->direction == DIR_RIGHT) ? 2 : -2;
             enemyBullets[i].yVel = 0;
+
+            sfxEnemyShoot();
+
             break;
         }
     }
@@ -565,6 +578,11 @@ void updateEnemyBullets(void) {
                       player.x, player.y, player.width, player.height)) {
 
             enemyBullets[i].active = 0;
+
+            if (player.invincibleTimer <= 0) {
+                sfxHit();
+            }
+
             damagePlayer();
         }
     }
@@ -670,8 +688,12 @@ void updateEnemies(void) {
                 score += SCORE_ENEMY_KILL;
 
                 player.yVel = -4; // bounce effect
+                sfxEnemyStomp();
             }
             else {
+                if (player.invincibleTimer <= 0) {
+                    sfxHit();
+                }
                 damagePlayer();
             }
         }
@@ -701,6 +723,10 @@ void damagePlayer(void) {
     // Lose one life and grant invincibility frames
     player.lives--;
     player.invincibleTimer = 60;
+
+    if (player.lives <= 0) {
+        sfxLose();
+    }
 
     // Reset movement state
     player.yVel = 0;
