@@ -494,7 +494,7 @@ void drawSpritesLevel2(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff, balloons[i].y - level2VOff, balloons[i].spriteVariant);
+            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff, balloons[i].y - level2VOff);
             oamIndex++;
         }
     }

@@ -52,7 +52,7 @@
 
 #define FONT_BASE_TILE 32
 
-#define OBJ_TILE_STAR            304
+#define OBJ_TILE_STAR            38
 #define OBJ_TILE_BULLET          305
 #define OBJ_TILE_EBULLET         306
 #define OBJ_TILE_BALLOON         320
@@ -62,6 +62,18 @@
 
 #define DIR_LEFT  0
 #define DIR_RIGHT 1
+#define DIR_UP    2
+#define DIR_DOWN  3
+
+// Animation: 4 frames per direction, each frame is a 2x2 block of 8x8 tiles
+// (the duck sprite is 16x16).  Between each direction row in the spritesheet
+// there is a 1-tile (8-pixel) gap column, so each direction occupies
+// 4 frames * 4 tiles + 4 gap tiles = 20 tile slots in 1D VRAM layout.
+// Adjust PLAYER_DIR_STRIDE if your grit export uses different spacing.
+#define PLAYER_FRAMES         4
+#define PLAYER_TILES_PER_FRAME 4   /* 2x2 tiles per 16x16 frame          */
+#define PLAYER_FRAME_STRIDE   5    /* tiles between frame starts (4 + 1 gap column) */
+#define PLAYER_DIR_STRIDE    20    /* tiles between direction row starts  */
 
 #define SCORE_BALLOON_BONUS 100
 #define SCORE_ENEMY_KILL    200
@@ -195,7 +207,7 @@ void updateEnemies(void);
 void drawPlayerSprite(int screenX, int screenY);
 void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY);
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet);
-void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
+void drawBalloonSprite(int oamIndex, int screenX, int screenY);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 void hideUnusedSpritesFrom(int startIndex);

@@ -369,16 +369,20 @@ void updateBalloonsLevel1(void) {
     int i;
 
     for (i = 0; i < MAX_BALLOONS; i++) {
-        if (balloons[i].active &&
-            collision(player.x, player.y, player.width, player.height,
+        if (!balloons[i].active) {
+            continue;
+        }
+
+        if (collision(player.x, player.y, player.width, player.height,
                       balloons[i].x, balloons[i].y, balloons[i].width, balloons[i].height)) {
 
             balloons[i].active = 0;
 
-            // Full health gives score, otherwise heal
-            if (player.lives == 3) {
-                score += SCORE_BALLOON_BONUS;
-            } else {
+            // Collecting a balloon always awards points — same behaviour whether
+            // enemies are still alive or not.  If the player is injured they also
+            // gain a life (capped at 3) in addition to the score bonus.
+            score += SCORE_BALLOON_BONUS;
+            if (player.lives < 3) {
                 player.lives++;
             }
         }
@@ -424,8 +428,7 @@ void drawSpritesLevel1(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff, balloons[i].spriteVariant);
-            oamIndex++;
+            drawBalloonSprite(oamIndex, balloons[i].x - level1HOff, balloons[i].y - level1VOff);            oamIndex++;
         }
     }
 
