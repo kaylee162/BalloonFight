@@ -210,6 +210,12 @@ void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant);
 void drawStarSprite(int oamIndex, int screenX, int screenY);
 void drawDoorSprite(int screenX, int screenY);
 
+// Balloons
+static u8 remapBalloonPixel(u8 srcIndex);
+static void copyObjTileBalloonRemapped(int dstTileIndex, int srcTileX, int srcTileY);
+static void copyBalloonFrameTo32x32Slot(int dstBaseTile, int srcTileX, int srcTileY);
+static void initBalloonPaletteRows(void);
+
 // Utility
 void hideUnusedSpritesFrom(int startIndex);
 int absInt(int x);
@@ -289,6 +295,7 @@ void drawGame(void) {
             if (pendingLevel1Load) {
                 initLevel1();
                 pendingLevel1Load = 0;
+                return;   // draw on the next frame, not the load frame
             }
             drawLevel1();
             break;
@@ -304,6 +311,7 @@ void drawGame(void) {
             if (pendingLevel2Load) {
                 initLevel2();
                 pendingLevel2Load = 0;
+                return;   // draw on the next frame, not the load frame
             }
             drawLevel2();
             break;
@@ -1192,10 +1200,11 @@ void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
 
 void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
     int tileBase = OBJ_TILE_BALLOON + ((variant & 3) * 16);
+    int palRow = 1 + (variant & 3);   // use OBJ palette rows 1..4
 
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
-    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(0);
+    shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(palRow);
 }
 
 void drawStarSprite(int oamIndex, int screenX, int screenY) {
@@ -1430,6 +1439,111 @@ static void copyObjTileRemapped(int dstTileIndex, int srcTileX, int srcTileY) {
     }
 }
 
+// Balloons
+static u8 remapBalloonPixel(u8 srcIndex) {
+    // Balloon pixels in the exported sheet currently use:
+    // 0  = transparent
+    // 1  = light fill
+    // 2  = medium/darker fill
+    // 5  = dark outline
+    // 10 = mid fill
+    // 14 = white highlight
+    //
+    // Remap them into a local 4bpp palette row layout:
+    // 0 = transparent
+    // 1 = outline
+    // 2 = dark shade
+    // 3 = mid shade
+    // 4 = light fill
+    // 5 = highlight
+    switch (srcIndex) {
+        case 0:  return 0;
+        case 5:  return 1;
+        case 2:  return 2;
+        case 10: return 3;
+        case 1:  return 4;
+        case 14: return 5;
+        default: return 0;
+    }
+}
+
+static void copyObjTileBalloonRemapped(int dstTileIndex, int srcTileX, int srcTileY) {
+    int i;
+    int srcTileIndex = srcTileY * 32 + srcTileX;
+    const unsigned char* src = ((const unsigned char*) spriteSheetTiles) + srcTileIndex * 32;
+    volatile unsigned short* dst =
+        (volatile unsigned short*) ((unsigned char*) OBJ_TILE_MEM + dstTileIndex * 32);
+
+    for (i = 0; i < 32; i += 2) {
+        unsigned char b0 = src[i];
+        unsigned char b1 = src[i + 1];
+
+        unsigned char lo0 = remapBalloonPixel(b0 & 0x0F);
+        unsigned char hi0 = remapBalloonPixel((b0 >> 4) & 0x0F);
+        unsigned char lo1 = remapBalloonPixel(b1 & 0x0F);
+        unsigned char hi1 = remapBalloonPixel((b1 >> 4) & 0x0F);
+
+        dst[i / 2] = lo0 | (hi0 << 4) | (lo1 << 8) | (hi1 << 12);
+    }
+}
+
+static void copyBalloonFrameTo32x32Slot(int dstBaseTile, int srcTileX, int srcTileY) {
+    int row;
+    int col;
+
+    for (row = 0; row < 4; row++) {
+        for (col = 0; col < 4; col++) {
+            int dstTile = dstBaseTile + row * 4 + col;
+
+            if (row < 3 && col < 3) {
+                copyObjTileBalloonRemapped(dstTile, srcTileX + col, srcTileY + row);
+            } else {
+                clearObjTileIndex(dstTile);
+            }
+        }
+    }
+}
+
+static void initBalloonPaletteRows(void) {
+    int base;
+
+    // Row 1: baby pink
+    base = 16;
+    SPRITE_PAL[base + 0] = 0;
+    SPRITE_PAL[base + 1] = RGB(26, 21, 23);
+    SPRITE_PAL[base + 2] = RGB(28, 23, 25);
+    SPRITE_PAL[base + 3] = RGB(30, 26, 28);
+    SPRITE_PAL[base + 4] = RGB(31, 29, 30);
+    SPRITE_PAL[base + 5] = RGB(31, 31, 31);
+
+    // Row 2: baby blue
+    base = 32;
+    SPRITE_PAL[base + 0] = 0;
+    SPRITE_PAL[base + 1] = RGB(20, 23, 27);
+    SPRITE_PAL[base + 2] = RGB(23, 26, 29);
+    SPRITE_PAL[base + 3] = RGB(26, 28, 31);
+    SPRITE_PAL[base + 4] = RGB(29, 30, 31);
+    SPRITE_PAL[base + 5] = RGB(31, 31, 31);
+
+    // Row 3: baby lavender
+    base = 48;
+    SPRITE_PAL[base + 0] = 0;
+    SPRITE_PAL[base + 1] = RGB(23, 21, 27);
+    SPRITE_PAL[base + 2] = RGB(25, 23, 29);
+    SPRITE_PAL[base + 3] = RGB(28, 26, 31);
+    SPRITE_PAL[base + 4] = RGB(30, 29, 31);
+    SPRITE_PAL[base + 5] = RGB(31, 31, 31);
+
+    // Row 4: baby yellow / peach
+    base = 64;
+    SPRITE_PAL[base + 0] = 0;
+    SPRITE_PAL[base + 1] = RGB(27, 23, 18);
+    SPRITE_PAL[base + 2] = RGB(29, 25, 20);
+    SPRITE_PAL[base + 3] = RGB(31, 28, 23);
+    SPRITE_PAL[base + 4] = RGB(31, 30, 27);
+    SPRITE_PAL[base + 5] = RGB(31, 31, 30);
+}
+
 static void clearObjTileIndex(int tileIndex) {
     int i;
     volatile unsigned short* dst = (volatile unsigned short*)((unsigned char*)OBJ_TILE_MEM + tileIndex * 32);
@@ -1508,10 +1622,12 @@ static void buildSpriteTiles(void) {
     // Copy each one into its own OBJ slot so we preserve the pastel colors
     // exactly as they appear in the sprite sheet.
     // --------------------------------------------------
-    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 0 * 16, 0, 17, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 1 * 16, 3, 17, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 2 * 16, 6, 17, 3, 3);
-    copyFrameTo32x32Slot(OBJ_TILE_BALLOON + 3 * 16, 9, 17, 3, 3);
+    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 0 * 16, 0, 17);
+    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 1 * 16, 3, 17);
+    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 2 * 16, 6, 17);
+    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 3 * 16, 9, 17);
+
+    initBalloonPaletteRows();
 
     // --------------------------------------------------
     // Enemy

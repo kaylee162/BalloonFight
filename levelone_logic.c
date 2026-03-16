@@ -12,6 +12,18 @@ void initLevel1(void) {
 
     initMode0();
 
+    // Clear out anything left from the menu / intro screen
+    clearHUD();
+    clearScreenblock(HUD_SCREENBLOCK);
+    clearScreenblock(LEVEL_SCREENBLOCK);
+    clearScreenblock(LEVEL_SCREENBLOCK + 1);
+    clearCharBlock(LEVEL_CHARBLOCK);
+    clearCharBlock(LEVEL_CHARBLOCK + 1);
+
+    // Hide all sprites immediately so old OAM data does not flash
+    hideSprites();
+    DMANow(3, shadowOAM, OAM, 128 * 4);
+
     // BG0 = HUD
     setupBackground(0, BG_PRIORITY(0) | BG_CHARBLOCK(HUD_CHARBLOCK) | BG_SCREENBLOCK(HUD_SCREENBLOCK) | BG_4BPP | BG_SIZE_SMALL);
 
@@ -447,7 +459,4 @@ void drawSpritesLevel1(void) {
 
     // Hide all remaining sprites
     hideUnusedSpritesFrom(oamIndex);
-
-    // Copy shadow OAM to hardware OAM
-    DMANow(3, shadowOAM, OAM, 512);
 }
