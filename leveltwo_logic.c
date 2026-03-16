@@ -547,7 +547,4 @@ void drawSpritesLevel2(void) {
 
     // Hide all remaining sprites
     hideUnusedSpritesFrom(oamIndex);
-
-    // Copy shadow OAM to hardware OAM
-    DMANow(3, shadowOAM, OAM, 512);
 }
