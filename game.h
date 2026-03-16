@@ -102,6 +102,7 @@ typedef enum {
     STATE_LEVEL2_INTRO,
     STATE_LEVEL2,
     STATE_PAUSE,
+    STATE_SCOREBOARD,
     STATE_WIN,
     STATE_LOSE
 } GameState;
@@ -193,6 +194,7 @@ extern Enemy enemies[MAX_ENEMIES];
 extern Balloon balloons[MAX_BALLOONS];
 extern Star stars[MAX_STARS];
 extern int score;
+extern int highScore;
 extern int level2BalloonsRemaining;
 extern int enemiesRemaining;
 extern int level1HOff;

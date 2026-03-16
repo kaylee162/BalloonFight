@@ -105,6 +105,7 @@ Star stars[MAX_STARS];
 
 // Score and progression
 int score;
+int highScore;
 int level2BalloonsRemaining;
 int enemiesRemaining;
 
@@ -132,6 +133,10 @@ static unsigned int spriteRngState = 0xA341316Cu;
 // This prevents intro-screen glitches when switching states.
 static int pendingLevel1Load = 0;
 static int pendingLevel2Load = 0;
+
+// Scoreboard feature
+static GameState scoreboardReturnState = STATE_START;
+static int scoreboardShowCurrentScore = 0;
 
 static void clearObjTileIndex(int tileIndex);
 // ======================================================
@@ -216,6 +221,12 @@ static void copyObjTileBalloonRemapped(int dstTileIndex, int srcTileX, int srcTi
 static void copyBalloonFrameTo32x32Slot(int dstBaseTile, int srcTileX, int srcTileY);
 static void initBalloonPaletteRows(void);
 
+// Scoreboard Keeping
+static void updateScoreboard(void);
+static void drawScoreboardScreen(void);
+static void enterScoreboard(GameState returnState, int showCurrentScore);
+static void refreshHighScore(void);
+
 // Utility
 void hideUnusedSpritesFrom(int startIndex);
 int absInt(int x);
@@ -225,6 +236,11 @@ int nextRandomSpriteVariant(void);
 // ======================================================
 //                    PUBLIC GAME API
 // ======================================================
+static void refreshHighScore(void) {
+    if (score > highScore) {
+        highScore = score;
+    }
+}
 
 // Initializes the whole game system
 void initGame(void) {
@@ -246,6 +262,7 @@ void initGame(void) {
 
 void updateGame(void) {
     frameCount++;
+    refreshHighScore();
 
     switch (state) {
         case STATE_START:
@@ -265,6 +282,9 @@ void updateGame(void) {
             break;
         case STATE_PAUSE:
             updatePause();
+            break;
+        case STATE_SCOREBOARD:
+            updateScoreboard();
             break;
         case STATE_WIN:
             updateWin();
@@ -323,6 +343,13 @@ void drawGame(void) {
             }
             break;
 
+         case STATE_SCOREBOARD:
+            if (menuNeedsRedraw) {
+                drawScoreboardScreen();
+                menuNeedsRedraw = 0;
+            }
+            break;
+
         case STATE_WIN:
             if (menuNeedsRedraw) {
                 drawWinScreen();
@@ -342,11 +369,15 @@ void drawGame(void) {
 // ======================================================
 //                   STATE UPDATE HELPERS
 // ======================================================
-
 static void updateStart(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         pendingLevel1Load = 1;
         state = STATE_LEVEL1;
+        return;
+    }
+
+    if (BUTTON_PRESSED(BUTTON_DOWN)) {
+        enterScoreboard(STATE_START, 0);
     }
 }
 
@@ -377,18 +408,47 @@ static void updatePause(void) {
 
         // Resume the exact level we were previously in.
         state = pausedState;
+        return;
+    }
+
+    if (BUTTON_PRESSED(BUTTON_DOWN)) {
+        enterScoreboard(STATE_PAUSE, 1);
+    }
+}
+
+static void enterScoreboard(GameState returnState, int showCurrentScore) {
+    scoreboardReturnState = returnState;
+    scoreboardShowCurrentScore = showCurrentScore;
+    state = STATE_SCOREBOARD;
+    menuNeedsRedraw = 1;
+}
+
+static void updateScoreboard(void) {
+    if (BUTTON_PRESSED(BUTTON_DOWN)) {
+        state = scoreboardReturnState;
+        menuNeedsRedraw = 1;
     }
 }
 
 static void updateWin(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         initGame();
+        return;
+    }
+
+    if (BUTTON_PRESSED(BUTTON_DOWN)) {
+        enterScoreboard(STATE_WIN, 1);
     }
 }
 
 static void updateLose(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         initGame();
+        return;
+    }
+
+    if (BUTTON_PRESSED(BUTTON_DOWN)) {
+        enterScoreboard(STATE_LOSE, 1);
     }
 }
 
@@ -1135,6 +1195,7 @@ static void clearMenuBackground(unsigned short entry) {
 
 static void drawStartScreen(void) {
     drawInfoScreen("BALLOON FIGHT", "PRESS START TO PLAY");
+    putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
 }
 
 static void drawLevel1IntroScreen(void) {
@@ -1149,14 +1210,36 @@ static void drawLevel2IntroScreen(void) {
 
 static void drawPauseScreen(void) {
     drawInfoScreen("BALLOON FIGHT", "PAUSED PRESS START");
+    putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
 }
 
 static void drawWinScreen(void) {
-    drawInfoScreen("BALLOON FIGHT", "YOU WON PRESS START");
+    drawInfoScreen("BALLOON FIGHT", "YOU WON!! PRESS START TO PLAY AGAIN");
+    putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
 }
 
 static void drawLoseScreen(void) {
-    drawInfoScreen("BALLOON FIGHT", "OH NO YOU LOST");
+    drawInfoScreen("BALLOON FIGHT", "OH NO! PRESS START TO REPLAY");
+    putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
+}
+
+static void drawScoreboardScreen(void) {
+    prepareMenuLayers();
+    loadMenuBackground();
+
+    clearHUD();
+
+    putStringHUD(2, 6,  "SCOREBOARD");
+
+    putStringHUD(2, 10,  "HIGH");
+    putNumberHUD(10, 10, highScore, 4);
+
+    if (scoreboardShowCurrentScore) {
+        putStringHUD(2, 12, "CURRENT");
+        putNumberHUD(13, 12, score, 4);
+    }
+
+    putStringHUD(2, 16, "DOWN TO GO BACK");
 }
 
 // ======================================================
