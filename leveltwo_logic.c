@@ -20,6 +20,9 @@ static void initStarsLevel2(void);
 static void placeFixedLevel2Balloons(void);
 static int balloonPlacementIsValid(int x, int y);
 
+// Cheat Helper
+static void handleLevel2DebugCheats(void);
+
 void initLevel2(void) {
     int i;
 
@@ -125,6 +128,27 @@ void buildLevel2Map(void) {
     DMANow(3, (void*) (leveltwoMap + 1024), SCREENBLOCK[LEVEL_SCREENBLOCK + 1].tilemap, 1024);
 }
 
+static void handleLevel2DebugCheats(void) {
+    int i;
+
+    // Helpful extra: SELECT + A = refill lives
+    if (BUTTON_HELD(BUTTON_SELECT) && BUTTON_PRESSED(BUTTON_A)) {
+        player.lives = 3;
+        return;
+    }
+
+    // Helpful extra: SELECT + B = instantly collect all remaining balloons
+    // Useful for testing the win screen / end-of-level flow.
+    if (BUTTON_HELD(BUTTON_SELECT) && BUTTON_PRESSED(BUTTON_B)) {
+        for (i = 0; i < MAX_BALLOONS; i++) {
+            balloons[i].active = 0;
+        }
+
+        level2BalloonsRemaining = 0;
+        return;
+    }
+}
+
 void updateLevel2(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         pausedState = STATE_LEVEL2;
@@ -132,6 +156,8 @@ void updateLevel2(void) {
         menuNeedsRedraw = 1;
         return;
     }
+
+    handleLevel2DebugCheats();
 
     if (player.invincibleTimer > 0) {
         player.invincibleTimer--;
