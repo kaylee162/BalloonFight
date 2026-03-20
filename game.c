@@ -131,8 +131,8 @@ static unsigned int spriteRngState = 0xA341316Cu;
 
 // Defer level VRAM/tilemap initialization until draw time.
 // This prevents intro-screen glitches when switching states.
-static int pendingLevel1Load = 0;
-static int pendingLevel2Load = 0;
+int pendingLevel1Load = 0;
+int pendingLevel2Load = 0;
 
 // Scoreboard feature
 static GameState scoreboardReturnState = STATE_START;
@@ -534,6 +534,9 @@ void firePlayerBullet(void) {
 void updatePlayerBullets(void) {
     int i;
     int j;
+    int levelWidth = (state == STATE_LEVEL2 || pausedState == STATE_LEVEL2)
+        ? LEVEL2_PIXEL_W
+        : LEVEL1_PIXEL_W;
 
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         if (!playerBullets[i].active) {
@@ -543,20 +546,23 @@ void updatePlayerBullets(void) {
         playerBullets[i].oldX = playerBullets[i].x;
         playerBullets[i].x += playerBullets[i].xVel;
 
-        // Deactivate off-screen / out-of-level bullets
-        if (playerBullets[i].x < -8 || playerBullets[i].x > LEVEL2_PIXEL_W) {
+        // Deactivate bullets once they leave the current level bounds.
+        // The +8 buffer keeps the whole 8x8 bullet from wrapping strangely in OBJ space.
+        if (playerBullets[i].x < -8 || playerBullets[i].x > levelWidth + 8) {
             playerBullets[i].active = 0;
             continue;
         }
 
         // Check bullet collision with enemies
         for (j = 0; j < MAX_ENEMIES; j++) {
-            if (!enemies[j].active) continue;
+            if (!enemies[j].active) {
+                continue;
+            }
 
-                if (collision(playerBullets[i].x, playerBullets[i].y,
-                        playerBullets[i].width, playerBullets[i].height,
-                        enemies[j].x, enemies[j].y,
-                        enemies[j].width, enemies[j].height)) {
+            if (collision(playerBullets[i].x, playerBullets[i].y,
+                          playerBullets[i].width, playerBullets[i].height,
+                          enemies[j].x, enemies[j].y,
+                          enemies[j].width, enemies[j].height)) {
 
                 playerBullets[i].active = 0;
 
@@ -567,7 +573,7 @@ void updatePlayerBullets(void) {
 
                     // Per spec: if no ground below, enemy dies immediately
                     if (findGroundYBelow(enemies[j].x, enemies[j].y,
-                                        enemies[j].width, enemies[j].height) < 0) {
+                                         enemies[j].width, enemies[j].height) < 0) {
                         enemies[j].active = 0;
                         enemies[j].phase = ENEMY_DEAD;
                         enemiesRemaining--;
@@ -586,7 +592,6 @@ void updatePlayerBullets(void) {
                 // PHASE 2 -> DEAD
                 // -------------------------------
                 else if (enemies[j].phase == ENEMY_WALKING) {
-
                     enemies[j].active = 0;
                     enemies[j].phase = ENEMY_DEAD;
 
@@ -1203,8 +1208,6 @@ static void drawLevel1IntroScreen(void) {
 }
 
 static void drawLevel2IntroScreen(void) {
-    prepareMenuLayers();
-    clearMenuBackground(0);
     drawInfoScreen("BALLOON FIGHT", "LEVEL TWO PRESS START");
 }
 
@@ -1705,7 +1708,7 @@ static void buildSpriteTiles(void) {
     // Copy each one into its own OBJ slot so we preserve the pastel colors
     // exactly as they appear in the sprite sheet.
     // --------------------------------------------------
-    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 0 * 16, 0, 17);
+    copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 0 * 16, 3, 17);
     copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 1 * 16, 3, 17);
     copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 2 * 16, 6, 17);
     copyBalloonFrameTo32x32Slot(OBJ_TILE_BALLOON + 3 * 16, 9, 17);

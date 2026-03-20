@@ -7,6 +7,90 @@
 #include "levelone.h"
 #include "collisionMapOne.h"
 
+static int level1BalloonPlacementIsValid(int x, int y, int width, int height) {
+    int px;
+    int py;
+
+    // Keep the full collectible rect inside the level bounds.
+    if (x < 0 || y < 0 || x + width > LEVEL1_PIXEL_W || y + height > LEVEL1_PIXEL_H) {
+        return 0;
+    }
+
+    // Add a small padding ring around the balloon so it is not wedged into
+    // terrain and still feels collectible when the player touches it.
+    //
+    // Since the visible sprite is larger than the logical hitbox, this padding
+    // helps the visual placement match the gameplay placement better.
+    for (py = y - 2; py < y + height + 2; py++) {
+        for (px = x - 2; px < x + width + 2; px++) {
+            if (px < 0 || py < 0 || px >= LEVEL1_PIXEL_W || py >= LEVEL1_PIXEL_H) {
+                return 0;
+            }
+
+            // Balloons should only sit in open air.
+            if (getCollisionPixel(px, py) != CM_OPEN) {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+static void placeLevel1Balloon(int index, int desiredX, int desiredY) {
+    int dx;
+    int dy;
+
+    // First try the exact requested position.
+    if (level1BalloonPlacementIsValid(desiredX, desiredY,
+                                      balloons[index].width, balloons[index].height)) {
+        balloons[index].x = desiredX;
+        balloons[index].y = desiredY;
+        balloons[index].active = 1;
+        return;
+    }
+
+    // If that position is bad, search nearby in a growing square.
+    // Use 4-pixel steps so we can nudge balloons without making them jump too far.
+    for (dy = -24; dy <= 24; dy += 4) {
+        for (dx = -24; dx <= 24; dx += 4) {
+            int testX = desiredX + dx;
+            int testY = desiredY + dy;
+
+            if (level1BalloonPlacementIsValid(testX, testY,
+                                              balloons[index].width, balloons[index].height)) {
+                balloons[index].x = testX;
+                balloons[index].y = testY;
+                balloons[index].active = 1;
+                return;
+            }
+        }
+    }
+
+    // Final fallback: disable the balloon instead of placing it in a broken spot.
+    balloons[index].active = 0;
+}
+
+static void initLevel1Balloons(void) {
+    int i;
+
+    for (i = 0; i < MAX_BALLOONS; i++) {
+        balloons[i].active = 0;
+        balloons[i].width = 24;
+        balloons[i].height = 24;
+        balloons[i].spriteVariant = nextRandomSpriteVariant();
+    }
+
+    // These are your intended design positions.
+    // The helper will keep them if valid, or nudge them to the nearest valid spot.
+    placeLevel1Balloon(0, 36, 144);
+    placeLevel1Balloon(1, 88, 152);
+    placeLevel1Balloon(2, 126, 88);
+    placeLevel1Balloon(3, 168, 136);
+    placeLevel1Balloon(4, 220, 72);
+    placeLevel1Balloon(5, 232, 168);
+}
+
 void initLevel1(void) {
     int i;
 
@@ -101,19 +185,7 @@ void initLevel1(void) {
     enemies[3].maxX = 232;
     enemies[3].direction = DIR_LEFT;
 
-    for (i = 0; i < MAX_BALLOONS; i++) {
-        balloons[i].active = 0;
-        balloons[i].width = 24;
-        balloons[i].height = 24;
-        balloons[i].spriteVariant = nextRandomSpriteVariant();
-    }
-
-    balloons[0].x = 36;  balloons[0].y = 144; balloons[0].active = 1;
-    balloons[1].x = 88;  balloons[1].y = 152; balloons[1].active = 1;
-    balloons[2].x = 126; balloons[2].y = 88;  balloons[2].active = 1;
-    balloons[3].x = 168; balloons[3].y = 136; balloons[3].active = 1;
-    balloons[4].x = 220; balloons[4].y = 72;  balloons[4].active = 1;
-    balloons[5].x = 232; balloons[5].y = 168; balloons[5].active = 1;
+    initLevel1Balloons();
 }
 
 void buildLevel1MapAndCollision(void) {
@@ -179,7 +251,9 @@ void updateLevel1(void) {
                 doorOpen = 1;
                 sfxDoorOpen();
             } else {
-                // Second contact while open: enter and advance to level 2
+                // Second contact while open: go to the level 2 intro screen first.
+                // This keeps the transition clean and prevents the player from
+                // seeing level-2 gameplay while the new level is still being built.
                 sfxDoorEnter();
                 state = STATE_LEVEL2_INTRO;
                 menuNeedsRedraw = 1;
@@ -389,17 +463,19 @@ void updateBalloonsLevel1(void) {
             continue;
         }
 
+        // Slight inset so the collectible region better matches the visible balloon art.
         if (collision(player.x, player.y, player.width, player.height,
-                      balloons[i].x, balloons[i].y, balloons[i].width, balloons[i].height)) {
+                      balloons[i].x + 4, balloons[i].y + 4,
+                      balloons[i].width - 8, balloons[i].height - 8)) {
 
             balloons[i].active = 0;
 
-            // Collecting a balloon always awards points — same behaviour whether
-            // or not the player also gains a life.
-            score += SCORE_BALLOON_BONUS;
-
+            // If the player is missing lives, restore a life instead of giving points.
+            // Only award points when already at full lives.
             if (player.lives < 3) {
                 player.lives++;
+            } else {
+                score += SCORE_BALLOON_BONUS;
             }
 
             sfxBalloon();
