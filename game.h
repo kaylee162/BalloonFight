@@ -202,6 +202,8 @@ extern int level1VOff;
 extern int level2HOff;
 extern int level2VOff;
 extern int menuNeedsRedraw;
+extern int pendingLevel1Load;
+extern int pendingLevel2Load;
 extern int doorVisible;
 extern int doorOpen;
 extern int doorX;

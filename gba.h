@@ -24,7 +24,6 @@ extern volatile unsigned short *videoBuffer;
 // Display control register
 #define REG_DISPCTL (*(volatile unsigned short *)0x4000000)
 
-// Bits for display control register
 #define MODE(x) ((x) & 7) // Sets GBA video mode (REG_DISPCTL)
 #define DISP_BACKBUFFER (1 << 4) // Displays backbuffer for page flipping (REG_DISPCTL)
 #define BG_ENABLE(x) (1 << (8 + (x % 4))) // Enables specified background (REG_DISPCTL)

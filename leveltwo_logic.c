@@ -6,9 +6,6 @@
 #include "leveltwo.h"
 #include "collisionMapTwo.h"
 
-// Private helper
-static void initStarsLevel2(void);
-
 // Level 2 traversal tuning
 #define LEVEL2_BALLOON_COUNT 10
 #define LEVEL2_SPAWN_X 24
@@ -18,32 +15,17 @@ static int starXVel[MAX_STARS];
 static int starMinX[MAX_STARS];
 static int starMaxX[MAX_STARS];
 
-// Private helpers for level 2 setup
-static int balloonPlacementIsValid(int x, int y);
-static void placeRandomLevel2Balloons(void);
+// Private helpers
 static void initStarsLevel2(void);
+static void placeFixedLevel2Balloons(void);
+static int balloonPlacementIsValid(int x, int y);
 
 void initLevel2(void) {
     int i;
 
-    // Fully reset Mode 0 backgrounds first
     initMode0();
 
-    setupBackground(0,
-        BG_PRIORITY(0) |
-        BG_CHARBLOCK(HUD_CHARBLOCK) |
-        BG_SCREENBLOCK(HUD_SCREENBLOCK) |
-        BG_4BPP |
-        BG_SIZE_SMALL);
-
-    setupBackground(1,
-        BG_PRIORITY(1) |
-        BG_CHARBLOCK(LEVEL_CHARBLOCK) |
-        BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
-        BG_4BPP |
-        BG_SIZE_WIDE);
-
-    // Clear out anything left from the intro/menu screen
+    // Clear out anything left from the level 2 intro / menu screen.
     clearHUD();
     clearScreenblock(HUD_SCREENBLOCK);
     clearScreenblock(LEVEL_SCREENBLOCK);
@@ -51,14 +33,34 @@ void initLevel2(void) {
     clearCharBlock(LEVEL_CHARBLOCK);
     clearCharBlock(LEVEL_CHARBLOCK + 1);
 
-    // Hide all sprites immediately so no old OAM state lingers
+    // Hide all sprites immediately so old OAM data does not flash.
     hideSprites();
     DMANow(3, shadowOAM, OAM, 128 * 4);
 
-    // Reload gameplay art
+    // BG0 = HUD
+    setupBackground(0,
+        BG_PRIORITY(0) |
+        BG_CHARBLOCK(HUD_CHARBLOCK) |
+        BG_SCREENBLOCK(HUD_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_SMALL);
+
+    // BG1 = gameplay map for the wide level 2 world
+    setupBackground(1,
+        BG_PRIORITY(1) |
+        BG_CHARBLOCK(LEVEL_CHARBLOCK) |
+        BG_SCREENBLOCK(LEVEL_SCREENBLOCK) |
+        BG_4BPP |
+        BG_SIZE_WIDE);
+
+    // Reload the gameplay palette and tiles because the intro screen
+    // replaced them with the screen/menu background art.
     loadBgPalette(tilesetPal, tilesetPalLen / 2);
+
+    // Keep HUD text colors in palette row 15.
     BG_PALETTE[240] = BLACK;
     BG_PALETTE[241] = WHITE;
+
     loadTilesToCharblock(LEVEL_CHARBLOCK, tilesetTiles, tilesetTilesLen / 2);
 
     level2HOff = 0;
@@ -66,7 +68,7 @@ void initLevel2(void) {
     setBackgroundOffset(0, 0, 0);
     setBackgroundOffset(1, 0, 0);
 
-    // Rebuild the level 2 map from scratch
+    // Now that the correct gameplay tiles are back in VRAM, build the real map.
     buildLevel2Map();
 
     // Clear player bullets
@@ -79,6 +81,8 @@ void initLevel2(void) {
     // No enemy bullets in level 2
     for (i = 0; i < MAX_ENEMY_BULLETS; i++) {
         enemyBullets[i].active = 0;
+        enemyBullets[i].width = 8;
+        enemyBullets[i].height = 8;
     }
 
     // No enemies in level 2
@@ -94,8 +98,17 @@ void initLevel2(void) {
         balloons[i].spriteVariant = nextRandomSpriteVariant();
     }
 
-    placeRandomLevel2Balloons();
-    level2BalloonsRemaining = LEVEL2_BALLOON_COUNT;
+    int activeBalloonCount = 0;
+
+    placeFixedLevel2Balloons();
+
+    for (i = 0; i < MAX_BALLOONS; i++) {
+        if (balloons[i].active) {
+            activeBalloonCount++;
+        }
+    }
+
+    level2BalloonsRemaining = activeBalloonCount;
 
     // Reset stars
     initStarsLevel2();
@@ -103,7 +116,6 @@ void initLevel2(void) {
     // Reset the player for level 2
     resetPlayerForCurrentLevel();
 
-    // This prevents the intro screen from trying to redraw after the transition
     menuNeedsRedraw = 0;
 }
 
@@ -132,10 +144,10 @@ void updateLevel2(void) {
     updatePlayerAnimation();
 
     level2HOff = CLAMP(player.x - (SCREENWIDTH / 2) + (player.width / 2),
-                    0, LEVEL2_PIXEL_W - SCREENWIDTH);
+                       0, LEVEL2_PIXEL_W - SCREENWIDTH);
 
     level2VOff = CLAMP(player.y - (SCREENHEIGHT / 2) + (player.height / 2),
-                    0, LEVEL2_PIXEL_H - SCREENHEIGHT);
+                       0, LEVEL2_PIXEL_H - SCREENHEIGHT);
 
     setBackgroundOffset(1, level2HOff, level2VOff);
 
@@ -220,7 +232,6 @@ void updatePlayerLevel2(void) {
     }
 
     // Hold UP to float upward
-    // More lives still means stronger upward movement
     if (BUTTON_HELD(BUTTON_UP) && player.lives > 0) {
         int targetUpVel = getFloatVelocityForLives(player.lives);
 
@@ -370,106 +381,72 @@ void updateStars(void) {
     }
 }
 
+static void placeFixedLevel2Balloons(void) {
+    int i;
+
+    // Pre-chosen balloon positions for level 2.
+    // These avoid the expensive random-search placement that caused lag.
+    static const int balloonX[LEVEL2_BALLOON_COUNT] = {
+        36, 84, 136, 188, 244, 296, 344, 392, 444, 484
+    };
+
+    static const int balloonY[LEVEL2_BALLOON_COUNT] = {
+        48, 104, 64, 156, 92, 52, 116, 72, 148, 180
+    };
+
+    for (i = 0; i < LEVEL2_BALLOON_COUNT; i++) {
+        balloons[i].width = 24;
+        balloons[i].height = 24;
+        balloons[i].spriteVariant = nextRandomSpriteVariant();
+
+        // These are fixed designer-chosen positions for level 2.
+        // Always load them so the required balloon count matches the win condition.
+        balloons[i].x = balloonX[i];
+        balloons[i].y = balloonY[i];
+        balloons[i].active = 1;
+    }
+
+    for (i = LEVEL2_BALLOON_COUNT; i < MAX_BALLOONS; i++) {
+        balloons[i].active = 0;
+        balloons[i].width = 24;
+        balloons[i].height = 24;
+    }
+}
+
 static int balloonPlacementIsValid(int x, int y) {
-    // Must stay inside the level
-    if (x < 0 || y < 0 || x + 8 > LEVEL2_PIXEL_W || y + 16 > LEVEL2_PIXEL_H) {
+    int left = x;
+    int right = x + 24 - 1;
+    int top = y;
+    int bottom = y + 24 - 1;
+    int groundY;
+
+    // Level 2 world is 64x32 tiles = 512x256 pixels.
+    if (left < 0 || right >= 512 || top < 0 || bottom >= 256) {
         return 0;
     }
 
-    // Balloon cannot intersect solid terrain
-    if (!canMoveTo(x, y, 8, 16)) {
+    // Must not overlap solid collision.
+    if (!canMoveTo(left, top, 24, 24)) {
         return 0;
     }
 
-    // Balloon cannot sit inside a kill/hazard region
-    if (rectTouchesColor(x, y, 8, 16, CM_KILL)) {
+    // Must not overlap the green platform color.
+    // If level 1 uses a different exact color index here, copy that value instead.
+    if (rectTouchesColor(left, top, 24, 24, 3)) {
         return 0;
     }
 
-    // Keep some air above the balloon so it is not buried under a platform
-    if (!canMoveTo(x, y - 4, 8, 4)) {
+    // Must have nearby ground/platform below.
+    groundY = findGroundYBelow(left, top, 24, 24);
+    if (groundY == -1) {
         return 0;
     }
 
-    // There should be valid ground somewhere below it
-    if (findGroundYBelow(x, y, 8, 16) < 0) {
+    if (groundY - bottom > 80) {
         return 0;
     }
 
     return 1;
-}
-
-static void placeRandomLevel2Balloons(void) {
-    int i;
-    int attempts;
-
-    for (i = 0; i < LEVEL2_BALLOON_COUNT; i++) {
-        int placed = 0;
-
-        // Try a lot of candidate positions across the map
-        for (attempts = 0; attempts < 256; attempts++) {
-            int x = 16 + ((i * 53 + attempts * 29) % (LEVEL2_PIXEL_W - 32));
-            int groundY = findGroundYBelow(x, 0, 8, 16);
-            int y;
-            int j;
-            int overlaps = 0;
-
-            // Need enough room above the supporting platform
-            if (groundY < 24) {
-                continue;
-            }
-
-            // Float the balloon above the nearest valid platform by a varied amount
-            y = groundY - (24 + ((i * 7 + attempts * 3) % 28));
-
-            if (!balloonPlacementIsValid(x, y)) {
-                continue;
-            }
-
-            // Avoid stacking balloons on top of each other
-            for (j = 0; j < i; j++) {
-                if (balloons[j].active &&
-                    collision(x, y, 8, 16,
-                              balloons[j].x, balloons[j].y,
-                              balloons[j].width, balloons[j].height)) {
-                    overlaps = 1;
-                    break;
-                }
-            }
-
-            if (overlaps) {
-                continue;
-            }
-
-            balloons[i].x = x;
-            balloons[i].y = y;
-            balloons[i].active = 1;
-            balloons[i].spriteVariant = nextRandomSpriteVariant();
-            placed = 1;
-            break;
-        }
-
-        if (!placed) {
-            // Safe fallback placements so the level always has 10 balloons
-            static const int fallbackX[LEVEL2_BALLOON_COUNT] = {
-                28, 92, 148, 202, 268, 320, 368, 420, 458, 492
-            };
-
-            int x = fallbackX[i];
-            int groundY = findGroundYBelow(x, 0, 8, 16);
-            int y = (groundY >= 32) ? (groundY - 24) : 32;
-
-            balloons[i].x = x;
-            balloons[i].y = y;
-            balloons[i].active = 1;
-            balloons[i].spriteVariant = nextRandomSpriteVariant();
-        }
-    }
-
-    // Any extra balloon slots stay unused
-    for (i = LEVEL2_BALLOON_COUNT; i < MAX_BALLOONS; i++) {
-        balloons[i].active = 0;
-    }
 }
 
 static void initStarsLevel2(void) {
@@ -518,7 +495,8 @@ void drawSpritesLevel2(void) {
     // Player bullets
     for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
         if (playerBullets[i].active) {
-            drawBulletSprite(oamIndex, playerBullets[i].x - level2HOff, playerBullets[i].y - level2VOff, 0);
+            drawBulletSprite(oamIndex, playerBullets[i].x - level2HOff,
+                             playerBullets[i].y - level2VOff, 0);
             oamIndex++;
         }
     }
@@ -526,7 +504,8 @@ void drawSpritesLevel2(void) {
     // Balloons
     for (i = 0; i < MAX_BALLOONS; i++) {
         if (balloons[i].active) {
-            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff, balloons[i].y - level2VOff, balloons[i].spriteVariant);
+            drawBalloonSprite(oamIndex, balloons[i].x - level2HOff,
+                              balloons[i].y - level2VOff, balloons[i].spriteVariant);
             oamIndex++;
         }
     }
