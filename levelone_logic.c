@@ -7,6 +7,10 @@
 #include "levelone.h"
 #include "collisionMapOne.h"
 
+// Cheat Helpers
+static void killAllLevel1Enemies(void);
+static void handleLevel1DebugCheats(void);
+
 static int level1BalloonPlacementIsValid(int x, int y, int width, int height) {
     int px;
     int py;
@@ -214,11 +218,72 @@ void buildLevel1MapAndCollision(void) {
     }
 }
 
+static void killAllLevel1Enemies(void) {
+    int i;
+
+    for (i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].active = 0;
+        enemies[i].phase = ENEMY_DEAD;
+        enemies[i].shootTimer = 0;
+    }
+
+    for (i = 0; i < MAX_ENEMY_BULLETS; i++) {
+        enemyBullets[i].active = 0;
+    }
+
+    enemiesRemaining = 0;
+
+    // Make sure the door appears immediately after the cheat.
+    if (!doorVisible) {
+        doorVisible = 1;
+        sfxDoorAppear();
+    }
+}
+
+static void handleLevel1DebugCheats(void) {
+    // Cheat 1: SELECT + R = skip straight to Level 2 intro screen
+    if (BUTTON_HELD(BUTTON_SELECT) && BUTTON_PRESSED(BUTTON_RSHOULDER)) {
+        // Clean up level 1 transient objects so nothing weird carries over visually.
+        int i;
+
+        for (i = 0; i < MAX_PLAYER_BULLETS; i++) {
+            playerBullets[i].active = 0;
+        }
+
+        for (i = 0; i < MAX_ENEMY_BULLETS; i++) {
+            enemyBullets[i].active = 0;
+        }
+
+        state = STATE_LEVEL2_INTRO;
+        menuNeedsRedraw = 1;
+        return;
+    }
+
+    // Cheat 2: SELECT + L = kill all enemies in level 1
+    if (BUTTON_HELD(BUTTON_SELECT) && BUTTON_PRESSED(BUTTON_LSHOULDER)) {
+        killAllLevel1Enemies();
+        return;
+    }
+
+    // Helpful extra: SELECT + A = refill lives
+    if (BUTTON_HELD(BUTTON_SELECT) && BUTTON_PRESSED(BUTTON_A)) {
+        player.lives = 3;
+        return;
+    }
+}
+
 void updateLevel1(void) {
     if (BUTTON_PRESSED(BUTTON_START)) {
         pausedState = STATE_LEVEL1;
         state = STATE_PAUSE;
         menuNeedsRedraw = 1;
+        return;
+    }
+
+    handleLevel1DebugCheats();
+
+    // Skip cheat may have changed state, so stop this frame immediately.
+    if (state != STATE_LEVEL1) {
         return;
     }
 

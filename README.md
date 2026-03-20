@@ -48,6 +48,31 @@ The goal of the game is to survive, move carefully through each level, and compl
 - **Button B**: Shoot bullets
 - **Start**: Start the game / progress from game state screens
 
+## Cheats
+### Level 1
+**SELECT + R**
+- jumps straight to STATE_LEVEL2_INTRO
+- does not require killing enemies or opening the door
+- works from anywhere in Level 1 gameplay
+  
+**SELECT + L**
+- disables all enemies
+- clears enemy bullets
+- forces enemiesRemaining = 0
+- makes the door appear immediately
+  
+**SELECT + A**
+- restores player lives to 3
+  
+### Level 2
+**SELECT + A**
+- restores player lives to 3
+  
+**SELECT + B**
+- clears all balloons
+-sets level2BalloonsRemaining = 0
+- lets you test the win transition immediately
+  
 ### Movement Notes
 - The player is always gradually falling unless supported by a platform or actively floating upward.
 - Floating is used both for traversal and for avoiding hazards/enemies.
@@ -140,8 +165,7 @@ The following features were added beyond the basic core gameplay:
 
 ## Known Issues
 
-- There is still a transition glitch between **Level 1 and Level 2** related to drawing/loading the new background cleanly.
-- There may also be occasional visual issues tied to sprite/background transitions depending on when the level changes occur.
+- There is a bit of a weird bug in level one. After all enemies are killed, if there are any balloons on the right side, the player is unable to collect them, and just pushes the balloon around the screen. It has somethign to do with the balloon logic, and the screen being 256x256 pixels instead of just 240x160 pixels. The logic just isn't right but I couldn't figure out how to fix it. 
 
 These were actively being debugged, but the core gameplay systems are implemented and functional.
 
