@@ -95,6 +95,74 @@
 #define PLAYER_GRAVITY             1
 #define PLAYER_MAX_FALL_SPEED      4
 
+// ======================================================
+//                       VRAM HELPERS
+// ======================================================
+
+// BG tile memory starts at 0x06000000
+#define BG_TILE_MEM ((u32*) 0x06000000)
+
+// OBJ tile memory starts at 0x06010000
+#define OBJ_TILE_MEM ((u32*) 0x06010000)
+
+// OBJ palette already exists in sprites.h as SPRITE_PAL
+
+// Useful clamp macro
+#define CLAMP(value, min, max) ((value) < (min) ? (min) : ((value) > (max) ? (max) : (value)))
+
+// Level dimensions in tiles
+#define LEVEL1_MAP_W 32
+#define LEVEL1_MAP_H 32
+#define LEVEL2_MAP_W 64
+#define LEVEL2_MAP_H 32
+
+// Level dimensions in pixels
+#define LEVEL1_PIXEL_W (LEVEL1_MAP_W * 8)
+#define LEVEL1_PIXEL_H (LEVEL1_MAP_H * 8)
+#define LEVEL2_PIXEL_W (LEVEL2_MAP_W * 8)
+#define LEVEL2_PIXEL_H (LEVEL2_MAP_H * 8)
+
+// HUD screenblock and charblock choices
+#define HUD_SCREENBLOCK 28
+#define HUD_CHARBLOCK 0
+
+// Gameplay background screenblock choices
+#define LEVEL_SCREENBLOCK 24
+#define LEVEL_CHARBLOCK 1
+
+// Simple tile indices for BG tiles
+#define TILE_BLANK      0
+#define TILE_SOLID      1
+#define TILE_PLATFORM   2
+#define TILE_SKY        3
+#define TILE_CLOUD      4
+#define TILE_STARBG     5
+#define TILE_DOOR       6
+#define TILE_BALLOONBG  7
+
+// Font tile base for BG0
+#define FONT_BASE_TILE 32
+
+// ======================================================
+// OBJ tile layout in 1D sprite memory
+// 32x32 sprite = 16 tiles
+// 8x8 sprite   = 1 tile
+// ======================================================
+#define OBJ_TILE_PLAYER_RIGHT   0
+#define OBJ_TILE_PLAYER_LEFT    64
+#define OBJ_TILE_PLAYER_UP      128
+#define OBJ_TILE_PLAYER_DOWN    192
+
+#define OBJ_TILE_ENEMY          256
+
+// Player directions
+#define DIR_LEFT  0
+#define DIR_RIGHT 1
+
+// Score values
+#define SCORE_BALLOON_BONUS 100
+#define SCORE_ENEMY_KILL    200
+
 typedef enum {
     STATE_START,
     STATE_LEVEL1_INTRO,
@@ -163,6 +231,8 @@ typedef struct {
     int animCounter;
     int currentFrame;
     int phase;
+    int grounded;
+    int landingY;
 } Enemy;
 
 typedef struct {

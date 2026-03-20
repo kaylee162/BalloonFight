@@ -159,6 +159,9 @@ void initLevel1(void) {
         enemies[i].animCounter = 0;
         enemies[i].currentFrame = 0;
         enemies[i].phase = ENEMY_FLOATING;
+        enemies[i].grounded = 0;
+        enemies[i].yVel = 0;
+        enemies[i].landingY = 0;
     }
 
     enemies[0].x = 72;
@@ -225,15 +228,29 @@ static void killAllLevel1Enemies(void) {
         enemies[i].active = 0;
         enemies[i].phase = ENEMY_DEAD;
         enemies[i].shootTimer = 0;
+        enemies[i].grounded = 0;
+        enemies[i].yVel = 0;
+
+        // Move them out of the playable world too, so even if some stale draw
+        // data survives for one frame, they cannot interfere with gameplay.
+        enemies[i].x = -32;
+        enemies[i].y = -32;
+        enemies[i].oldX = enemies[i].x;
+        enemies[i].oldY = enemies[i].y;
     }
 
     for (i = 0; i < MAX_ENEMY_BULLETS; i++) {
         enemyBullets[i].active = 0;
+        enemyBullets[i].x = -8;
+        enemyBullets[i].y = -8;
+        enemyBullets[i].oldX = enemyBullets[i].x;
+        enemyBullets[i].oldY = enemyBullets[i].y;
+        enemyBullets[i].xVel = 0;
+        enemyBullets[i].yVel = 0;
     }
 
     enemiesRemaining = 0;
 
-    // Make sure the door appears immediately after the cheat.
     if (!doorVisible) {
         doorVisible = 1;
         sfxDoorAppear();

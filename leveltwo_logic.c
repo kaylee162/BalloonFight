@@ -18,7 +18,6 @@ static int starMaxX[MAX_STARS];
 // Private helpers
 static void initStarsLevel2(void);
 static void placeFixedLevel2Balloons(void);
-static int balloonPlacementIsValid(int x, int y);
 
 // Cheat Helper
 static void handleLevel2DebugCheats(void);
@@ -115,6 +114,10 @@ void initLevel2(void) {
 
     // Reset stars
     initStarsLevel2();
+
+    // Advancing to level 2 restores the player to 3 lives.
+    player.lives = 3;
+    player.invincibleTimer = 0;
 
     // Reset the player for level 2
     resetPlayerForCurrentLevel();
@@ -370,20 +373,8 @@ void updateStars(void) {
 
         stars[i].oldY = stars[i].y;
 
-        // Move in both axes
-        stars[i].x += starXVel[i];
+        // Move only vertically so stars travel top-to-bottom as required.
         stars[i].y += stars[i].yVel;
-
-        // Horizontal bounce
-        if (stars[i].x <= starMinX[i]) {
-            stars[i].x = starMinX[i];
-            starXVel[i] = 1;
-        }
-
-        if (stars[i].x >= starMaxX[i]) {
-            stars[i].x = starMaxX[i];
-            starXVel[i] = -1;
-        }
 
         // Vertical bounce
         if (stars[i].y <= stars[i].minY) {
@@ -439,52 +430,15 @@ static void placeFixedLevel2Balloons(void) {
     }
 }
 
-static int balloonPlacementIsValid(int x, int y) {
-    int left = x;
-    int right = x + 24 - 1;
-    int top = y;
-    int bottom = y + 24 - 1;
-    int groundY;
-
-    // Level 2 world is 64x32 tiles = 512x256 pixels.
-    if (left < 0 || right >= 512 || top < 0 || bottom >= 256) {
-        return 0;
-    }
-
-    // Must not overlap solid collision.
-    if (!canMoveTo(left, top, 24, 24)) {
-        return 0;
-    }
-
-    // Must not overlap the green platform color.
-    // If level 1 uses a different exact color index here, copy that value instead.
-    if (rectTouchesColor(left, top, 24, 24, 3)) {
-        return 0;
-    }
-
-    // Must have nearby ground/platform below.
-    groundY = findGroundYBelow(left, top, 24, 24);
-    if (groundY == -1) {
-        return 0;
-    }
-
-    if (groundY - bottom > 80) {
-        return 0;
-    }
-
-    return 1;
-}
-
 static void initStarsLevel2(void) {
     int i;
 
     // Spread stars along the traversal route.
-    // Each one gets its own horizontal and vertical patrol range.
+    // Each one gets its own vertical patrol range.
     static const int baseX[MAX_STARS]  = { 76, 132, 210, 286, 330, 388, 452, 486 };
     static const int baseY[MAX_STARS]  = { 56, 114, 70, 172, 84, 60, 126, 186 };
-    static const int rangeX[MAX_STARS] = { 18, 22, 26, 24, 18, 28, 22, 14 };
     static const int rangeY[MAX_STARS] = { 14, 18, 12, 16, 22, 18, 20, 14 };
-
+    
     for (i = 0; i < MAX_STARS; i++) {
         stars[i].x = baseX[i];
         stars[i].y = baseY[i];
@@ -499,9 +453,9 @@ static void initStarsLevel2(void) {
         stars[i].maxY = baseY[i] + rangeY[i];
         stars[i].active = 1;
 
-        starXVel[i] = (i & 1) ? -1 : 1;
-        starMinX[i] = baseX[i] - rangeX[i];
-        starMaxX[i] = baseX[i] + rangeX[i];
+        starXVel[i] = 0;
+        starMinX[i] = baseX[i];
+        starMaxX[i] = baseX[i];
     }
 }
 
