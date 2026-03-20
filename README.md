@@ -165,9 +165,9 @@ The following features were added beyond the basic core gameplay:
 
 ## Known Issues
 
-- There is a bit of a weird bug in level one. After all enemies are killed, if there are any balloons on the right side, the player is unable to collect them, and just pushes the balloon around the screen. It has somethign to do with the balloon logic, and the screen being 256x256 pixels instead of just 240x160 pixels. The logic just isn't right but I couldn't figure out how to fix it. 
+There is a small known issue in Level 1 with balloons near the left and right sides of the map. After all enemies are defeated, those balloons sometimes aren't displayed correctly. There will be a duplicate of the original balloon that scrolls vertically to the original. This seems to be related to how the ballons are handled between the full world size (256×256) and the visible screen (240×160), and/or how the balloon object tile is handled.
 
-These were actively being debugged, but the core gameplay systems are implemented and functional.
+I spent some time debugging this, but wasn’t able to fully resolve it before submission. Aside from this edge case, all core gameplay systems—including movement, enemies, level progression, and scoring—are working as expected..
 
 ---
 

@@ -16,75 +16,6 @@
 
 #include "screen.h"
 
-
-// ======================================================
-//                       VRAM HELPERS
-// ======================================================
-
-// BG tile memory starts at 0x06000000
-#define BG_TILE_MEM ((u32*) 0x06000000)
-
-// OBJ tile memory starts at 0x06010000
-#define OBJ_TILE_MEM ((u32*) 0x06010000)
-
-// OBJ palette already exists in sprites.h as SPRITE_PAL
-
-// Useful clamp macro
-#define CLAMP(value, min, max) ((value) < (min) ? (min) : ((value) > (max) ? (max) : (value)))
-
-// Level dimensions in tiles
-#define LEVEL1_MAP_W 32
-#define LEVEL1_MAP_H 32
-#define LEVEL2_MAP_W 64
-#define LEVEL2_MAP_H 32
-
-// Level dimensions in pixels
-#define LEVEL1_PIXEL_W (LEVEL1_MAP_W * 8)
-#define LEVEL1_PIXEL_H (LEVEL1_MAP_H * 8)
-#define LEVEL2_PIXEL_W (LEVEL2_MAP_W * 8)
-#define LEVEL2_PIXEL_H (LEVEL2_MAP_H * 8)
-
-// HUD screenblock and charblock choices
-#define HUD_SCREENBLOCK 28
-#define HUD_CHARBLOCK 0
-
-// Gameplay background screenblock choices
-#define LEVEL_SCREENBLOCK 24
-#define LEVEL_CHARBLOCK 1
-
-// Simple tile indices for BG tiles
-#define TILE_BLANK      0
-#define TILE_SOLID      1
-#define TILE_PLATFORM   2
-#define TILE_SKY        3
-#define TILE_CLOUD      4
-#define TILE_STARBG     5
-#define TILE_DOOR       6
-#define TILE_BALLOONBG  7
-
-// Font tile base for BG0
-#define FONT_BASE_TILE 32
-
-// ======================================================
-// OBJ tile layout in 1D sprite memory
-// 32x32 sprite = 16 tiles
-// 8x8 sprite   = 1 tile
-// ======================================================
-#define OBJ_TILE_PLAYER_RIGHT   0
-#define OBJ_TILE_PLAYER_LEFT    64
-#define OBJ_TILE_PLAYER_UP      128
-#define OBJ_TILE_PLAYER_DOWN    192
-
-#define OBJ_TILE_ENEMY          256
-
-// Player directions
-#define DIR_LEFT  0
-#define DIR_RIGHT 1
-
-// Score values
-#define SCORE_BALLOON_BONUS 100
-#define SCORE_ENEMY_KILL    200
-
 // ======================================================
 //                     GLOBAL GAME DATA
 // ======================================================
@@ -186,7 +117,6 @@ static void updatePause(void);
 static void updateLevel2Intro(void);
 static void updateWin(void);
 static void updateLose(void);
-static void clearMenuBackground(unsigned short entry);
 
 // Object updates
 void updatePlayerAnimation(void);
@@ -195,6 +125,11 @@ void updatePlayerBullets(void);
 void updateEnemyBullets(void);
 void updateEnemies(void);
 static void spawnEnemyBullet(Enemy* e);
+static int findEnemyLandingY(int startX, int startY, int width, int height);
+static int enemyCanStandAt(int x, int y, int width, int height);
+static int enemyWouldFallAtNextStep(int nextX, int y, int width, int height);
+static int enemyWouldFallAtNextStep(int nextX, int y, int width, int height);
+static int enemyIsInWater(int x, int y, int width, int height);
 
 // Physics / collisions
 u8 getCollisionPixel(int x, int y);
@@ -531,6 +466,54 @@ void firePlayerBullet(void) {
     }
 }
 
+// ======================================================
+//                     ENEMY HELPERS
+// ======================================================
+static int enemyIsInWater(int x, int y, int width, int height) {
+    int leftX  = x + 2;
+    int rightX = x + width - 3;
+    int footY  = y + height - 1;
+
+    int leftTile  = getCollisionPixel(leftX, footY);
+    int rightTile = getCollisionPixel(rightX, footY);
+
+    return (leftTile == CM_KILL || rightTile == CM_KILL);
+}
+
+static int enemyCanStandAt(int x, int y, int width, int height) {
+    // Enemy body must fit here.
+    if (!canMoveTo(x, y, width, height)) {
+        return 0;
+    }
+
+    // Must have support directly under its feet.
+    // Inset the probes a little so platform edges behave better.
+    if (canMoveTo(x + 2, y + 1, width - 4, height)) {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int enemyWouldFallAtNextStep(int nextX, int y, int width, int height) {
+    // If there is no support under the feet after stepping to nextX,
+    // the enemy would walk off the platform.
+    return canMoveTo(nextX + 2, y + 1, width - 4, height);
+}
+
+static int findEnemyLandingY(int startX, int startY, int width, int height) {
+    int testY;
+
+    // Scan only downward. Never allow a popped enemy to move upward.
+    for (testY = startY; testY < LEVEL1_PIXEL_H; testY++) {
+        if (enemyCanStandAt(startX, testY, width, height)) {
+            return testY;
+        }
+    }
+
+    return -1;
+}
+
 void updatePlayerBullets(void) {
     int i;
     int j;
@@ -546,63 +529,66 @@ void updatePlayerBullets(void) {
         playerBullets[i].oldX = playerBullets[i].x;
         playerBullets[i].x += playerBullets[i].xVel;
 
-        // Deactivate bullets once they leave the current level bounds.
-        // The +8 buffer keeps the whole 8x8 bullet from wrapping strangely in OBJ space.
+        // Deactivate once fully outside the level bounds.
         if (playerBullets[i].x < -8 || playerBullets[i].x > levelWidth + 8) {
             playerBullets[i].active = 0;
             continue;
         }
 
-        // Check bullet collision with enemies
         for (j = 0; j < MAX_ENEMIES; j++) {
+            int landingY;
+
             if (!enemies[j].active) {
                 continue;
             }
 
-            if (collision(playerBullets[i].x, playerBullets[i].y,
-                          playerBullets[i].width, playerBullets[i].height,
-                          enemies[j].x, enemies[j].y,
-                          enemies[j].width, enemies[j].height)) {
+            if (!collision(playerBullets[i].x, playerBullets[i].y,
+                           playerBullets[i].width, playerBullets[i].height,
+                           enemies[j].x, enemies[j].y,
+                           enemies[j].width, enemies[j].height)) {
+                continue;
+            }
 
-                playerBullets[i].active = 0;
+            // Bullet is always consumed on enemy impact.
+            playerBullets[i].active = 0;
 
-                // -------------------------------
-                // PHASE 1 -> PHASE 2 TRANSITION
-                // -------------------------------
-                if (enemies[j].phase == ENEMY_FLOATING) {
+            // Floating enemy -> popped / walking phase
+            if (enemies[j].phase == ENEMY_FLOATING) {
+                landingY = findEnemyLandingY(enemies[j].x, enemies[j].y,
+                                             enemies[j].width, enemies[j].height);
 
-                    // Per spec: if no ground below, enemy dies immediately
-                    if (findGroundYBelow(enemies[j].x, enemies[j].y,
-                                         enemies[j].width, enemies[j].height) < 0) {
-                        enemies[j].active = 0;
-                        enemies[j].phase = ENEMY_DEAD;
-                        enemiesRemaining--;
-                        score += SCORE_ENEMY_KILL;
-
-                        sfxBomb();
-                    } else {
-                        enemies[j].phase = ENEMY_WALKING;
-                        enemies[j].yVel = 2;
-
-                        sfxEnemyDrop();
-                    }
-
-                }
-                // -------------------------------
-                // PHASE 2 -> DEAD
-                // -------------------------------
-                else if (enemies[j].phase == ENEMY_WALKING) {
+                // No valid walkable landing below: enemy dies immediately.
+                if (landingY < 0) {
                     enemies[j].active = 0;
                     enemies[j].phase = ENEMY_DEAD;
+                    enemies[j].grounded = 0;
+                    enemies[j].landingY = 0;
+                    enemies[j].yVel = 0;
 
                     enemiesRemaining--;
                     score += SCORE_ENEMY_KILL;
-
                     sfxBomb();
-                }
+                } else {
+                    enemies[j].phase = ENEMY_WALKING;
+                    enemies[j].shootTimer = 0;
+                    enemies[j].yVel = 0;
+                    enemies[j].landingY = landingY;
 
-                break;
+                    if (landingY == enemies[j].y) {
+                        enemies[j].grounded = 1;
+                    } else {
+                        enemies[j].grounded = 0;
+                    }
+
+                    sfxEnemyDrop();
+                }
             }
+            // Walking enemy is bullet immune
+            else if (enemies[j].phase == ENEMY_WALKING) {
+                // Bullet disappears, enemy survives.
+            }
+
+            break;
         }
     }
 }
@@ -669,17 +655,17 @@ void updateEnemies(void) {
     int i;
 
     for (i = 0; i < MAX_ENEMIES; i++) {
-        if (!enemies[i].active) continue;
+        if (!enemies[i].active) {
+            continue;
+        }
 
         enemies[i].oldX = enemies[i].x;
         enemies[i].oldY = enemies[i].y;
 
-        // ==================================================
-        // PHASE 1 : FLOATING ENEMY
-        // ==================================================
+        // ==========================================
+        // PHASE 1: floating enemies
+        // ==========================================
         if (enemies[i].phase == ENEMY_FLOATING) {
-
-            // Horizontal floating movement
             enemies[i].x += (enemies[i].direction == DIR_RIGHT)
                             ? enemies[i].xVel
                             : -enemies[i].xVel;
@@ -694,7 +680,6 @@ void updateEnemies(void) {
                 enemies[i].direction = DIR_LEFT;
             }
 
-            // Floating enemies can shoot
             enemies[i].shootTimer--;
             if (enemies[i].shootTimer <= 0) {
                 spawnEnemyBullet(&enemies[i]);
@@ -702,68 +687,97 @@ void updateEnemies(void) {
             }
         }
 
-        // ==================================================
-        // PHASE 2 : WALKING ENEMY (NO BALLOON)
-        // ==================================================
+        // ==========================================
+        // PHASE 2: popped / walking enemies
+        // ==========================================
         else if (enemies[i].phase == ENEMY_WALKING) {
-            int step;
-            int xDelta;
 
-            // Apply gravity with collision, one pixel at a time
-            enemies[i].yVel += 1;
-            if (enemies[i].yVel > 3) enemies[i].yVel = 3;
+            // Fall straight down to the landing platform.
+            if (!enemies[i].grounded) {
+                if (enemies[i].y < enemies[i].landingY) {
+                    enemies[i].y += 1;
 
-            for (step = 0; step < enemies[i].yVel; step++) {
-                if (canMoveTo(enemies[i].x, enemies[i].y + 1,
-                              enemies[i].width, enemies[i].height)) {
-                    enemies[i].y++;
+                    if (enemies[i].y >= enemies[i].landingY) {
+                        enemies[i].y = enemies[i].landingY;
+                        enemies[i].grounded = 1;
+                    }
                 } else {
-                    enemies[i].yVel = 0;
-                    break;
+                    enemies[i].y = enemies[i].landingY;
+                    enemies[i].grounded = 1;
                 }
             }
 
-            // Horizontal movement with collision
-            xDelta = (enemies[i].direction == DIR_RIGHT) ? enemies[i].xVel : -enemies[i].xVel;
-            if (canMoveTo(enemies[i].x + xDelta, enemies[i].y,
-                          enemies[i].width, enemies[i].height)) {
-                enemies[i].x += xDelta;
-            } else {
-                // Flip direction on wall collision
-                enemies[i].direction = (enemies[i].direction == DIR_RIGHT) ? DIR_LEFT : DIR_RIGHT;
-            }
+            // Once grounded, patrol left/right and never walk off.
+            else {
+                int xDelta = (enemies[i].direction == DIR_RIGHT)
+                    ? enemies[i].xVel
+                    : -enemies[i].xVel;
+                int nextX = enemies[i].x + xDelta;
 
-            if (enemies[i].x <= enemies[i].minX) {
-                enemies[i].x = enemies[i].minX;
-                enemies[i].direction = DIR_RIGHT;
-            }
-
-            if (enemies[i].x >= enemies[i].maxX) {
-                enemies[i].x = enemies[i].maxX;
-                enemies[i].direction = DIR_LEFT;
+                // Turn around at walls.
+                if (!canMoveTo(nextX, enemies[i].y,
+                               enemies[i].width, enemies[i].height)) {
+                    enemies[i].direction = (enemies[i].direction == DIR_RIGHT)
+                        ? DIR_LEFT
+                        : DIR_RIGHT;
+                }
+                // Turn around at ledges / water / non-support surfaces.
+                else if (enemyWouldFallAtNextStep(nextX, enemies[i].y,
+                                                  enemies[i].width, enemies[i].height)) {
+                    enemies[i].direction = (enemies[i].direction == DIR_RIGHT)
+                        ? DIR_LEFT
+                        : DIR_RIGHT;
+                }
+                else {
+                    enemies[i].x = nextX;
+                }
             }
         }
 
-        // ==================================================
-        // PLAYER COLLISION
-        // ==================================================
-        if (collision(enemies[i].x, enemies[i].y,
-                    enemies[i].width, enemies[i].height,
-                    player.x, player.y,
-                    player.width, player.height)) {
+        // ==========================================
+        // Hazard check: if enemy touches water (tile index 2), it dies
+        // ==========================================
+        if (enemyIsInWater(enemies[i].x, enemies[i].y,
+                           enemies[i].width, enemies[i].height)) {
+            enemies[i].active = 0;
+            enemies[i].phase = ENEMY_DEAD;
+            enemies[i].grounded = 0;
+            enemies[i].landingY = 0;
+            enemies[i].yVel = 0;
 
-            // Player stomps enemy from above
-            if (player.y + player.height <= enemies[i].y + 4 &&
-                enemies[i].phase == ENEMY_WALKING) {
+            enemiesRemaining--;
+            score += SCORE_ENEMY_KILL;
+
+            sfxBomb();
+            continue;
+        }
+
+        // ==========================================
+        // Collision with player
+        // ==========================================
+        if (collision(enemies[i].x, enemies[i].y,
+                      enemies[i].width, enemies[i].height,
+                      player.x, player.y,
+                      player.width, player.height)) {
+
+            // Only grounded walking enemies can be stomped
+            if (enemies[i].phase == ENEMY_WALKING &&
+                enemies[i].grounded &&
+                player.oldY + player.height <= enemies[i].y + 2 &&
+                player.yVel >= 0) {
 
                 enemies[i].active = 0;
+                enemies[i].phase = ENEMY_DEAD;
+                enemies[i].grounded = 0;
+                enemies[i].landingY = 0;
+                enemies[i].yVel = 0;
+
                 enemiesRemaining--;
                 score += SCORE_ENEMY_KILL;
 
-                player.yVel = -4; // bounce effect
+                player.yVel = -4;
                 sfxEnemyStomp();
-            }
-            else {
+            } else {
                 if (player.invincibleTimer <= 0) {
                     sfxHit();
                 }
@@ -771,12 +785,10 @@ void updateEnemies(void) {
             }
         }
 
-        // Animation
         enemies[i].animCounter++;
         if (enemies[i].animCounter >= 10) {
             enemies[i].animCounter = 0;
-            enemies[i].currentFrame =
-                (enemies[i].currentFrame + 1) % 3;
+            enemies[i].currentFrame = (enemies[i].currentFrame + 1) % 3;
         }
     }
 }
@@ -1190,14 +1202,6 @@ static void restorePausedGameplayLayers(void) {
     }
 }
 
-static void clearMenuBackground(unsigned short entry) {
-    int i;
-    /* Fill the level screenblock with a single tile entry (usually 0 = blank) */
-    for (i = 0; i < 32 * 32; i++) {
-        SCREENBLOCK[LEVEL_SCREENBLOCK].tilemap[i] = entry;
-    }
-}
-
 static void drawStartScreen(void) {
     drawInfoScreen("BALLOON FIGHT", "PRESS START TO PLAY");
     putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
@@ -1217,7 +1221,7 @@ static void drawPauseScreen(void) {
 }
 
 static void drawWinScreen(void) {
-    drawInfoScreen("BALLOON FIGHT", "YOU WON!! PRESS START TO PLAY AGAIN");
+    drawInfoScreen("BALLOON FIGHT", "YOU WON!!");
     putStringHUD(2, 17, "DOWN TO VIEW SCOREBOARD");
 }
 
@@ -1248,12 +1252,20 @@ static void drawScoreboardScreen(void) {
 // ======================================================
 //                  SPRITE DRAWING HELPERS
 // ======================================================
+static int spriteIsOnScreen(int screenX, int screenY, int width, int height) {
+    return !(screenX <= -width || screenX >= SCREENWIDTH
+          || screenY <= -height || screenY >= SCREENHEIGHT);
+}
 
-//HERE
 void drawPlayerSprite(int screenX, int screenY) {
     int tileBase;
     int movedUp   = (player.y < player.oldY);
     int movedDown = (player.y > player.oldY) && !player.grounded;
+
+    if (!spriteIsOnScreen(screenX - 4, screenY - 8, 32, 32)) {
+        shadowOAM[0].attr0 = ATTR0_HIDE;
+        return;
+    }
 
     if (movedUp) {
         tileBase = OBJ_TILE_PLAYER_UP + player.currentFrame * 16;
@@ -1273,12 +1285,22 @@ void drawPlayerSprite(int screenX, int screenY) {
 void drawEnemySprite(int enemyIndex, int oamIndex, int screenX, int screenY) {
     int tileBase = OBJ_TILE_ENEMY + (enemies[enemyIndex].currentFrame % 3) * 16;
 
+    if (!spriteIsOnScreen(screenX - 4, screenY - 8, 32, 32)) {
+        shadowOAM[oamIndex].attr0 = ATTR0_HIDE;
+        return;
+    }
+
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY - 8) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX - 4) | ATTR1_MEDIUM;
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(tileBase) | ATTR2_PALROW(0);
 }
 
 void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
+    if (!spriteIsOnScreen(screenX, screenY, 8, 8)) {
+        shadowOAM[oamIndex].attr0 = ATTR0_HIDE;
+        return;
+    }
+
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_TINY;
     shadowOAM[oamIndex].attr2 = ATTR2_TILEID(enemyBullet ? OBJ_TILE_EBULLET : OBJ_TILE_BULLET) | ATTR2_PALROW(0);
@@ -1286,7 +1308,12 @@ void drawBulletSprite(int oamIndex, int screenX, int screenY, int enemyBullet) {
 
 void drawBalloonSprite(int oamIndex, int screenX, int screenY, int variant) {
     int tileBase = OBJ_TILE_BALLOON + ((variant & 3) * 16);
-    int palRow = 1 + (variant & 3);   // use OBJ palette rows 1..4
+    int palRow = 1 + (variant & 3);
+
+    if (!spriteIsOnScreen(screenX, screenY, 32, 32)) {
+        shadowOAM[oamIndex].attr0 = ATTR0_HIDE;
+        return;
+    }
 
     shadowOAM[oamIndex].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
     shadowOAM[oamIndex].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
@@ -1301,18 +1328,22 @@ void drawStarSprite(int oamIndex, int screenX, int screenY) {
 }
 
 void drawDoorSprite(int screenX, int screenY) {
+    if (!spriteIsOnScreen(screenX, screenY, 32, doorOpen ? 40 : 32)) {
+        shadowOAM[120].attr0 = ATTR0_HIDE;
+        shadowOAM[121].attr0 = ATTR0_HIDE;
+        return;
+    }
+
     if (!doorOpen) {
-        // Closed door: 32x32 pixels = SQUARE + MEDIUM
         shadowOAM[120].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
         shadowOAM[120].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
         shadowOAM[120].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_CLOSED) | ATTR2_PALROW(0);
         shadowOAM[121].attr0 = ATTR0_HIDE;
     } else {
-        // Open door top: 32x32 pixels = SQUARE + MEDIUM
         shadowOAM[120].attr0 = ATTR0_Y(screenY) | ATTR0_SQUARE | ATTR0_4BPP;
         shadowOAM[120].attr1 = ATTR1_X(screenX) | ATTR1_MEDIUM;
         shadowOAM[120].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_OPEN_TOP) | ATTR2_PALROW(0);
-        // Open door bottom row: 32x8 pixels = WIDE + SMALL, 32px below the top sprite
+
         shadowOAM[121].attr0 = ATTR0_Y(screenY + 32) | ATTR0_WIDE | ATTR0_4BPP;
         shadowOAM[121].attr1 = ATTR1_X(screenX) | ATTR1_SMALL;
         shadowOAM[121].attr2 = ATTR2_TILEID(OBJ_TILE_DOOR_OPEN_BOT) | ATTR2_PALROW(0);
@@ -1350,15 +1381,18 @@ static void buildSimpleStarTile(int tileIndex) {
     // 5  = dark outline
     // 15 = orange fill
     // 3  = darker orange accent
+    //
+    // This version is still 8x8, but shaped more like a sparkle/starburst
+    // instead of a rounded blob.
     u8 pixels[64] = {
-        0,0,0,5,5,0,0,0,
+        0,0,0,5,0,0,0,0,
+        0,0,0,15,0,0,0,0,
+        0,5,0,15,0,5,0,0,
+        5,15,15,15,15,15,5,0,
+        0,5,15,3,3,15,5,0,
         0,0,5,15,15,5,0,0,
-        0,5,15,15,15,15,5,0,
-        5,15,15,3,3,15,15,5,
-        0,5,15,15,15,15,5,0,
-        0,0,5,15,15,5,0,0,
-        0,0,0,5,5,0,0,0,
-        0,0,0,0,0,0,0,0
+        0,5,0,15,0,5,0,0,
+        0,0,0,5,0,0,0,0
     };
 
     write4bppTile(OBJ_TILE_MEM, tileIndex, pixels);
